@@ -10,16 +10,20 @@ interface Message {
   content: string;
 }
 
-export default function ArgusPage() {
+export default function ArgusDeliberation() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [provider, setProvider] = useState<ProviderType>("auto");
-  const [voiceOn, setVoiceOn] = useState(false);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [activeConversationId, setActiveConversationId] = useState<string>("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setActiveConversationId(crypto.randomUUID());
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -35,20 +39,20 @@ export default function ArgusPage() {
     const convId = activeConversationId || crypto.randomUUID();
     if (!activeConversationId) setActiveConversationId(convId);
 
-    const userMsg: Message = {
+    const userMessage: Message = {
       id: crypto.randomUUID(),
       role: "user",
       content: trimmed,
     };
 
-    const tempAssistantId = crypto.randomUUID();
-    const assistantMsg: Message = {
-      id: tempAssistantId,
+    const assistantId = crypto.randomUUID();
+    const assistantMessage: Message = {
+      id: assistantId,
       role: "model",
       content: "",
     };
 
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    setMessages((prev) => [...prev, userMessage, assistantMessage]);
     setIsLoading(true);
 
     try {
@@ -63,40 +67,40 @@ export default function ArgusPage() {
       });
 
       if (!response.ok) {
-        const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.error || `HTTP ${response.status}`);
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${response.status}`);
       }
 
-      if (!response.body) throw new Error("No response stream available.");
+      if (!response.body) throw new Error("Stream body missing");
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let streamBuffer = "";
+      let buffer = "";
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
 
-        streamBuffer += decoder.decode(value, { stream: true });
-        const lines = streamBuffer.split("\n\n");
-        streamBuffer = lines.pop() || "";
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
           if (line.startsWith("data: ")) {
-            const rawData = line.replace(/^data: /, "").trim();
-            if (!rawData) continue;
-            const parsed = JSON.parse(rawData);
+            const jsonStr = line.replace(/^data: /, "").trim();
+            if (!jsonStr) continue;
+            const payload = JSON.parse(jsonStr);
 
-            if (parsed.error) {
-              setErrorMessage(parsed.error);
+            if (payload.error) {
+              setErrorMessage(payload.error);
               break;
             }
 
-            if (parsed.token) {
+            if (payload.token) {
               setMessages((prev) =>
                 prev.map((msg) =>
-                  msg.id === tempAssistantId
-                    ? { ...msg, content: msg.content + parsed.token }
+                  msg.id === assistantId
+                    ? { ...msg, content: msg.content + payload.token }
                     : msg
                 )
               );
@@ -105,7 +109,7 @@ export default function ArgusPage() {
         }
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Error streaming response";
+      const msg = err instanceof Error ? err.message : "Error receiving transmission";
       setErrorMessage(msg);
     } finally {
       setIsLoading(false);
@@ -113,51 +117,56 @@ export default function ArgusPage() {
   }
 
   return (
-    <div className="relative h-screen w-screen bg-[#070b12] text-slate-100 flex flex-col justify-between overflow-hidden select-none font-sans">
-      {/* ----------------- ROTATING SPHERE BACKGROUND ----------------- */}
-      <div className="absolute inset-0 pointer-events-none flex items-center justify-center overflow-hidden opacity-35">
-        {/* Outer glowing orbital ring */}
-        <div className="sphere-outer absolute w-[550px] h-[550px] rounded-full border border-cyan-500/20 border-dashed shadow-[0_0_80px_rgba(6,182,212,0.15)]" />
-        
-        {/* Counter-rotating tilted ring */}
-        <div className="sphere-inner absolute w-[420px] h-[420px] rounded-full border border-teal-400/25 border-dotted" />
-        
-        {/* Deep Core Sphere Gradient */}
-        <div className="absolute w-[320px] h-[320px] rounded-full bg-gradient-to-tr from-cyan-950/40 via-cyan-900/10 to-transparent blur-xl" />
+    <div className="relative h-screen w-screen bg-[#06090e] text-[#e6edf3] flex flex-col justify-between overflow-hidden select-none">
+      {/* -------------------- CELESTIAL ROTATING SPHERE -------------------- */}
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
+        {/* Deep ambient radial glow */}
+        <div className="absolute w-[680px] h-[680px] rounded-full bg-cyan-950/20 blur-3xl" />
+
+        {/* Outer Ring */}
+        <div className="sphere-outer-ring absolute w-[520px] h-[520px] rounded-full border border-cyan-500/20 border-dashed" />
+
+        {/* Inner Counter-Rotating Ring */}
+        <div className="sphere-inner-ring absolute w-[380px] h-[380px] rounded-full border border-teal-400/20 border-dotted" />
+
+        {/* Core Sphere Pulse */}
+        <div className="absolute w-[260px] h-[260px] rounded-full bg-gradient-to-tr from-cyan-900/30 via-slate-900/60 to-transparent blur-md border border-cyan-500/10 shadow-[0_0_80px_rgba(6,182,212,0.15)]" />
       </div>
 
-      {/* Top Header */}
-      <header className="relative z-10 pt-10 text-center">
-        <div className="text-[11px] font-mono tracking-widest text-cyan-400/80 uppercase">
+      {/* -------------------- TOP HEADER -------------------- */}
+      <header className="relative z-10 pt-12 text-center">
+        <div className="text-[11px] font-mono tracking-[0.25em] text-cyan-400/90 font-medium uppercase">
           ARGUS // CONVERSATION
         </div>
-        <h1 className="text-2xl font-bold tracking-tight text-white mt-1">
+        <h1 className="text-3xl font-semibold tracking-tight text-white mt-1.5">
           New deliberation
         </h1>
-        <p className="text-xs text-slate-400 mt-1">
+        <p className="text-sm text-slate-400 mt-1 font-normal">
           Ask anything. Think better, together.
         </p>
       </header>
 
-      {/* Message Feed Container */}
-      <div className="relative z-10 flex-1 overflow-y-auto px-4 max-w-2xl w-full mx-auto space-y-4 my-4">
+      {/* -------------------- MESSAGE STREAM CONTAINER -------------------- */}
+      <main className="relative z-10 flex-1 overflow-y-auto px-4 max-w-2xl w-full mx-auto space-y-4 my-4 flex flex-col justify-start">
         {messages.map((m) => (
           <div
             key={m.id}
             className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}
           >
-            <div className="flex items-center gap-1.5 mb-1 text-[11px] font-medium text-slate-400">
-              <span>{m.role === "user" ? "You" : "ARGUS"}</span>
+            <div className="flex items-center gap-2 mb-1 px-1">
+              <span className="text-[11px] font-medium text-slate-400">
+                {m.role === "user" ? "You" : "ARGUS"}
+              </span>
               <span className="text-[10px] text-slate-500">
                 {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
             </div>
 
             <div
-              className={`text-sm px-4 py-3 rounded-2xl max-w-lg leading-relaxed whitespace-pre-wrap backdrop-blur-md shadow-lg ${
+              className={`text-sm px-4 py-2.5 rounded-2xl max-w-lg leading-relaxed whitespace-pre-wrap shadow-xl ${
                 m.role === "user"
-                  ? "bg-cyan-950/60 border border-cyan-700/60 text-cyan-100"
-                  : "bg-[#0d1624]/90 border border-slate-800 text-slate-200"
+                  ? "bg-cyan-950/80 border border-cyan-700/60 text-cyan-50"
+                  : "bg-[#0b1017]/90 border border-slate-800 text-slate-200"
               }`}
             >
               {m.content}
@@ -165,18 +174,20 @@ export default function ArgusPage() {
           </div>
         ))}
 
+        {/* Error Notification */}
         {errorMessage && (
           <div className="p-3 text-xs rounded-xl border border-rose-900/80 bg-rose-950/60 text-rose-300">
-            <span className="font-semibold">Error: </span>
+            <span className="font-semibold text-rose-200">Error: </span>
             {errorMessage}
           </div>
         )}
         <div ref={messagesEndRef} />
-      </div>
+      </main>
 
-      {/* Bottom Floating Control Dock */}
-      <div className="relative z-10 max-w-2xl w-full mx-auto px-4 pb-6">
-        <div className="relative rounded-2xl border border-cyan-500/30 bg-[#0a101b]/80 backdrop-blur-xl p-3 shadow-[0_0_30px_rgba(0,0,0,0.8)] focus-within:border-cyan-400 transition">
+      {/* -------------------- BOTTOM CONTROL DOCK -------------------- */}
+      <footer className="relative z-10 max-w-2xl w-full mx-auto px-4 pb-6">
+        {/* Glow Input Container */}
+        <div className="relative rounded-2xl border border-cyan-500/40 bg-[#090d15]/85 backdrop-blur-md p-3 shadow-[0_0_40px_rgba(0,0,0,0.85)] focus-within:border-cyan-400 transition-all">
           <textarea
             rows={2}
             value={input}
@@ -192,37 +203,44 @@ export default function ArgusPage() {
           />
 
           <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs">
-            {/* Quick Action Badges */}
+            {/* Quick Chips */}
             <div className="flex items-center gap-3 text-slate-400 text-[11px]">
               <button
                 type="button"
-                className="hover:text-cyan-300 transition"
+                className="hover:text-cyan-300 transition cursor-pointer"
               >
                 Voice input
               </button>
               <span className="text-slate-600">EN</span>
               <button
                 type="button"
-                onClick={() => setVoiceOn(!voiceOn)}
-                className="hover:text-cyan-300 transition"
+                onClick={() => setVoiceEnabled(!voiceEnabled)}
+                className="hover:text-cyan-300 transition flex items-center gap-1 cursor-pointer"
               >
-                {voiceOn ? "🔊 Voice on" : "🔇 Voice off"}
+                <span>{voiceEnabled ? "🔊" : "🔇"}</span>
+                <span>{voiceEnabled ? "Voice on" : "Voice off"}</span>
               </button>
             </div>
 
-            {/* Send Button */}
-            <button
-              disabled={isLoading || !input.trim()}
-              onClick={sendMessage}
-              className="flex items-center gap-1.5 px-3 py-1 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 rounded-lg text-xs font-medium transition disabled:opacity-30 disabled:pointer-events-none"
-            >
-              <span>{isLoading ? "Thinking..." : "Send"}</span>
-              <span className="text-[10px]">↵</span>
-            </button>
+            {/* Send Action */}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-slate-500">↵ to send</span>
+              <button
+                disabled={isLoading || !input.trim()}
+                onClick={sendMessage}
+                className="h-8 w-8 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 flex items-center justify-center transition disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
+              >
+                {isLoading ? (
+                  <span className="animate-spin text-xs">◌</span>
+                ) : (
+                  <span className="text-sm">→</span>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Status Bar / Engine Switcher */}
+        {/* Engine Failover Selector Bar */}
         <div className="flex items-center justify-between text-[11px] text-slate-500 mt-2 px-1">
           <span>ARGUS can make mistakes. Verify important details.</span>
           <div className="flex items-center gap-2">
@@ -230,7 +248,7 @@ export default function ArgusPage() {
             <select
               value={provider}
               onChange={(e) => setProvider(e.target.value as ProviderType)}
-              className="bg-[#0b1019] text-slate-300 text-[11px] border border-slate-800 rounded px-2 py-0.5 focus:outline-none focus:border-cyan-500 cursor-pointer"
+              className="bg-[#090d15] text-slate-300 text-[11px] border border-slate-800 rounded px-2 py-0.5 focus:outline-none focus:border-cyan-500 cursor-pointer"
             >
               <option value="auto">Auto (Gemini → Groq)</option>
               <option value="gemini">Gemini 2.5 Flash</option>
@@ -238,7 +256,7 @@ export default function ArgusPage() {
             </select>
           </div>
         </div>
-      </div>
+      </footer>
     </div>
   );
 }

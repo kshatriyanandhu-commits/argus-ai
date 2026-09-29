@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #070b12;
-  --text: #e2e8f0;
+  --background: #06090e;
+  --foreground: #e6edf3;
 }
 
 * {
@@ -13,35 +13,40 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background-color: #070b12;
-  color: #e2e8f0;
+  background-color: #06090e;
+  color: #e6edf3;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   overflow: hidden;
-  height: 100%;
+  height: 100vh;
+  width: 100vw;
 }
 
-/* Rotating Sphere Animations */
-@keyframes spinSlow {
-  from {
-    transform: rotate(0deg);
+/* Original Rotating Sphere / Cosmic Glow */
+@keyframes orbRotateClockwise {
+  0% {
+    transform: rotate(0deg) scale(1);
   }
-  to {
+  50% {
+    transform: rotate(180deg) scale(1.05);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}
+
+@keyframes orbRotateCounter {
+  0% {
     transform: rotate(360deg);
   }
-}
-
-@keyframes spinReverse {
-  from {
-    transform: rotate(360deg);
-  }
-  to {
+  100% {
     transform: rotate(0deg);
   }
 }
 
-.sphere-outer {
-  animation: spinSlow 30s linear infinite;
+.sphere-outer-ring {
+  animation: orbRotateClockwise 40s linear infinite;
 }
 
-.sphere-inner {
-  animation: spinReverse 20s linear infinite;
+.sphere-inner-ring {
+  animation: orbRotateCounter 28s linear infinite;
 }
