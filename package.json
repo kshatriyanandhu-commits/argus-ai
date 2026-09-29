@@ -10,19 +10,20 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.2",
     "groq-sdk": "^1.6.0",
     "lucide-react": "^1.48.0",
     "next": "16.2.6",
-    "pg": "^8.20.0",
+    "pg": "^8.23.0",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.17",
     "@types/node": "^22.19.15",
-    "@types/pg": "^8.18.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "drizzle-kit": "^0.31.10",
