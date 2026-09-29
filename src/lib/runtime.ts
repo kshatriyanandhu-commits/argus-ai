@@ -89,31 +89,25 @@ export async function* streamChat(
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
-  // 1. Explicit Groq Selected
   if (provider === "groq") {
-    if (!groqKey) {
-      throw new Error("GROQ_API_KEY is not configured in Vercel environment variables.");
-    }
+    if (!groqKey) throw new Error("GROQ_API_KEY is missing in Vercel.");
     yield* streamFromGroq(history, newMessage, groqKey, signal);
     return;
   }
 
-  // 2. Explicit Gemini Selected
   if (provider === "gemini") {
-    if (!geminiKey) {
-      throw new Error("GEMINI_API_KEY is not configured in Vercel environment variables.");
-    }
+    if (!geminiKey) throw new Error("GEMINI_API_KEY is missing in Vercel.");
     yield* streamFromGemini(history, newMessage, geminiKey, signal);
     return;
   }
 
-  // 3. Auto Mode: Primary Gemini with Groq fallback
+  // Auto fallback pipeline
   if (geminiKey) {
     try {
       yield* streamFromGemini(history, newMessage, geminiKey, signal);
       return;
-    } catch (geminiError) {
-      console.warn("Gemini engine error, triggering Groq fallback...", geminiError);
+    } catch (err) {
+      console.warn("Gemini stream failed, switching to Groq:", err);
     }
   }
 
@@ -122,5 +116,5 @@ export async function* streamChat(
     return;
   }
 
-  throw new Error("Neither GEMINI_API_KEY nor GROQ_API_KEY is set in Vercel.");
+  throw new Error("No API keys found. Please set GEMINI_API_KEY or GROQ_API_KEY in Vercel.");
 }

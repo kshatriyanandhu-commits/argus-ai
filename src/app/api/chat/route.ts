@@ -25,7 +25,6 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Load conversation history for context
     const previousMessages = await db
       .select()
       .from(argusMessages)
@@ -37,7 +36,6 @@ export async function POST(req: NextRequest) {
       content: m.content,
     }));
 
-    // Record incoming user message
     await db.insert(argusMessages).values({
       id: crypto.randomUUID(),
       conversationId,
@@ -45,7 +43,6 @@ export async function POST(req: NextRequest) {
       content: message.trim(),
     });
 
-    // Touch conversation updated timestamp
     await db
       .update(argusConversations)
       .set({ updatedAt: new Date() })
@@ -67,7 +64,6 @@ export async function POST(req: NextRequest) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ token })}\n\n`));
           }
 
-          // Persist completed assistant message
           if (completeResponse.trim() && db) {
             await db.insert(argusMessages).values({
               id: crypto.randomUUID(),
