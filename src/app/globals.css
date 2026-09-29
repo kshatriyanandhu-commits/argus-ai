@@ -2,11 +2,7 @@
 
 :root {
   --bg: #070b12;
-  --sidebar: #090e17;
-  --panel: #0d1624;
-  --line: #1e293b;
   --text: #e2e8f0;
-  --teal: #06b6d4;
 }
 
 * {
@@ -17,7 +13,35 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background-color: var(--bg);
-  color: var(--text);
-  min-height: 100vh;
+  background-color: #070b12;
+  color: #e2e8f0;
+  overflow: hidden;
+  height: 100%;
+}
+
+/* Rotating Sphere Animations */
+@keyframes spinSlow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes spinReverse {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+.sphere-outer {
+  animation: spinSlow 30s linear infinite;
+}
+
+.sphere-inner {
+  animation: spinReverse 20s linear infinite;
 }
