@@ -5,11 +5,12 @@ import { streamChat, RawMessage } from "@/lib/runtime";
 import { eq, asc } from "drizzle-orm";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
     if (!db) {
-      return new Response(JSON.stringify({ error: "Database not initialized." }), {
+      return new Response(JSON.stringify({ error: "Database connection unavailable." }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });
@@ -18,13 +19,13 @@ export async function POST(req: NextRequest) {
     const { conversationId, message } = await req.json();
 
     if (!conversationId || !message || typeof message !== "string") {
-      return new Response(JSON.stringify({ error: "Invalid conversationId or message payload." }), {
+      return new Response(JSON.stringify({ error: "Missing conversationId or message payload." }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    // Retrieve previous messages for context
+    // 1. Fetch previous messages for conversation context
     const previousMessages = await db
       .select()
       .from(argusMessages)
@@ -32,11 +33,11 @@ export async function POST(req: NextRequest) {
       .orderBy(asc(argusMessages.createdAt));
 
     const history: RawMessage[] = previousMessages.map((m) => ({
-      role: m.role as "user" | "model" | "assistant",
+      role: m.role as "user" | "model" | "assistant" | "system",
       content: m.content,
     }));
 
-    // Record the user's incoming message
+    // 2. Persist the incoming user message
     await db.insert(argusMessages).values({
       id: crypto.randomUUID(),
       conversationId,
@@ -44,13 +45,13 @@ export async function POST(req: NextRequest) {
       content: message.trim(),
     });
 
-    // Update conversation timestamp
+    // 3. Touch updated timestamp
     await db
       .update(argusConversations)
       .set({ updatedAt: new Date() })
       .where(eq(argusConversations.id, conversationId));
 
-    // Prepare response stream
+    // 4. Stream response
     const encoder = new TextEncoder();
     let completeResponse = "";
 
@@ -75,9 +76,9 @@ export async function POST(req: NextRequest) {
             encoder.encode(`data: ${JSON.stringify({ done: true, fullText: completeResponse })}\n\n`)
           );
           controller.close();
-        } catch (error) {
-          const messageText = error instanceof Error ? error.message : "Inference stream error";
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: messageText })}\n\n`));
+        } catch (streamErr) {
+          const errMsg = streamErr instanceof Error ? streamErr.message : "Inference runtime error";
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errMsg })}\n\n`));
           controller.close();
         }
       },
