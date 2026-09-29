@@ -8,6 +8,13 @@ export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   try {
+    if (!db) {
+      return new Response(JSON.stringify({ error: "Database not initialized." }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const { conversationId, message } = await req.json();
 
     if (!conversationId || !message || typeof message !== "string") {
@@ -29,7 +36,7 @@ export async function POST(req: NextRequest) {
       content: m.content,
     }));
 
-    // Record the user's incoming message in database
+    // Record the user's incoming message
     await db.insert(argusMessages).values({
       id: crypto.randomUUID(),
       conversationId,
@@ -55,8 +62,7 @@ export async function POST(req: NextRequest) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ token })}\n\n`));
           }
 
-          // Persist completed model response
-          if (completeResponse.trim()) {
+          if (completeResponse.trim() && db) {
             await db.insert(argusMessages).values({
               id: crypto.randomUUID(),
               conversationId,
