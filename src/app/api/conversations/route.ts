@@ -1,87 +1,85 @@
-import { db, conversations, messages } from "@/db";
-import { and, asc, desc, eq } from "drizzle-orm";
-import { NextResponse } from "next/server";
-import { getOwner, withOwnerCookie, getProviderStatus } from "@/lib/runtime";
+import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/db";
+import { argusConversations, argusMessages } from "@/db/schema";
+import { desc, eq, asc } from "drizzle-orm";
 
-export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-export async function GET(request: Request) {
-  const { ownerId, isNew } = await getOwner();
-  const { searchParams } = new URL(request.url);
-  const id = searchParams.get("id");
-
-  if (!db) {
-    return withOwnerCookie(
-      NextResponse.json({ error: "Database not configured. Run: npm run db:push" }, { status: 503 }),
-      ownerId,
-      isNew
-    );
-  }
-
+export async function GET(req: NextRequest) {
   try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
+
     if (id) {
-      const [conv] = await db
+      const messages = await db
         .select()
-        .from(conversations)
-        .where(and(eq(conversations.id, id), eq(conversations.ownerId, ownerId)))
-        .limit(1);
+        .from(argusMessages)
+        .where(eq(argusMessages.conversationId, id))
+        .orderBy(asc(argusMessages.createdAt));
 
-      if (!conv) return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
-
-      const items = await db
-        .select()
-        .from(messages)
-        .where(eq(messages.conversationId, id))
-        .orderBy(asc(messages.createdAt), asc(messages.id));
-
-      return NextResponse.json({ conversation: conv, messages: items });
+      return NextResponse.json({ messages });
     }
 
-    const status = await getProviderStatus();
-    const items = await db
+    const conversations = await db
       .select()
-      .from(conversations)
-      .where(eq(conversations.ownerId, ownerId))
-      .orderBy(desc(conversations.updatedAt));
+      .from(argusConversations)
+      .orderBy(desc(argusConversations.updatedAt));
 
-    return withOwnerCookie(NextResponse.json({ conversations: items, ...status }), ownerId, isNew);
+    const provider = process.env.AI_PROVIDER || "gemini";
+    const hasKey = Boolean(process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY);
+
+    return NextResponse.json({
+      conversations,
+      configured: provider === "ollama" ? true : hasKey,
+      model:
+        provider === "ollama"
+          ? process.env.OLLAMA_MODEL || "llama3.2"
+          : process.env.GEMINI_MODEL || "gemini-2.5-flash",
+      provider,
+      issue: !hasKey && provider !== "ollama" ? "API key not configured in environment." : "",
+    });
   } catch (error) {
-    console.error("Conversation fetch error:", error);
-    return NextResponse.json({ error: "Failed to fetch conversations." }, { status: 500 });
+    const msg = error instanceof Error ? error.message : "Failed to fetch conversations.";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
-export async function POST() {
-  const { ownerId, isNew } = await getOwner();
-  if (!db) return NextResponse.json({ error: "Database not configured." }, { status: 503 });
-
+export async function POST(req: NextRequest) {
   try {
-    const id = crypto.randomUUID();
-    const [conversation] = await db.insert(conversations).values({ id, ownerId }).returning();
-    return withOwnerCookie(NextResponse.json({ conversation }, { status: 201 }), ownerId, isNew);
+    const body = await req.json().catch(() => ({}));
+    const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "New deliberation";
+
+    const newId = crypto.randomUUID();
+    const [conversation] = await db
+      .insert(argusConversations)
+      .values({
+        id: newId,
+        title,
+      })
+      .returning();
+
+    return NextResponse.json({ conversation });
   } catch (error) {
-    console.error("Conversation creation error:", error);
-    return NextResponse.json({ error: "Could not create conversation." }, { status: 500 });
+    const msg = error instanceof Error ? error.message : "Failed to create conversation.";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
-export async function DELETE(request: Request) {
-  const { ownerId } = await getOwner();
-  const { searchParams } = new URL(request.url);
-  const id = searchParams.get("id");
-
-  if (!db || !id) return NextResponse.json({ error: "Missing conversation ID." }, { status: 400 });
-
+export async function DELETE(req: NextRequest) {
   try {
-    const deleted = await db
-      .delete(conversations)
-      .where(and(eq(conversations.id, id), eq(conversations.ownerId, ownerId)))
-      .returning({ id: conversations.id });
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
 
-    if (!deleted.length) return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
+    if (!id) {
+      return NextResponse.json({ error: "Missing conversation ID." }, { status: 400 });
+    }
+
+    await db.delete(argusMessages).where(eq(argusMessages.conversationId, id));
+    await db.delete(argusConversations).where(eq(argusConversations.id, id));
+
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Conversation deletion error:", error);
-    return NextResponse.json({ error: "Could not delete conversation." }, { status: 500 });
+    const msg = error instanceof Error ? error.message : "Failed to delete conversation.";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
