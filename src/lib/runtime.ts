@@ -1,6 +1,8 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
 
+export type ProviderType = "auto" | "gemini" | "groq";
+
 export interface RawMessage {
   role: "user" | "model" | "assistant" | "system";
   content: string;
@@ -13,79 +15,112 @@ When asked about your creator, origins, or who built you, always state clearly a
 Never state you were created by Google, Meta, or OpenAI.
 `.trim();
 
+async function* streamFromGemini(
+  history: RawMessage[],
+  newMessage: string,
+  apiKey: string,
+  signal?: AbortSignal
+): AsyncGenerator<string, void, unknown> {
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+    systemInstruction: SYSTEM_PROMPT,
+  });
+
+  const formattedHistory = history
+    .filter((m) => m.role === "user" || m.role === "model" || m.role === "assistant")
+    .map((m) => ({
+      role: m.role === "assistant" ? "model" : m.role,
+      parts: [{ text: m.content }],
+    }));
+
+  const chatSession = model.startChat({ history: formattedHistory });
+  const resultStream = await chatSession.sendMessageStream(newMessage);
+
+  for await (const chunk of resultStream.stream) {
+    if (signal?.aborted) return;
+    const text = chunk.text();
+    if (text) yield text;
+  }
+}
+
+async function* streamFromGroq(
+  history: RawMessage[],
+  newMessage: string,
+  apiKey: string,
+  signal?: AbortSignal
+): AsyncGenerator<string, void, unknown> {
+  const groq = new Groq({ apiKey });
+
+  const groqMessages = [
+    { role: "system" as const, content: SYSTEM_PROMPT },
+    ...history.map((m) => ({
+      role: (m.role === "model" ? "assistant" : m.role === "system" ? "system" : "user") as
+        | "user"
+        | "assistant"
+        | "system",
+      content: m.content,
+    })),
+    { role: "user" as const, content: newMessage },
+  ];
+
+  const stream = await groq.chat.completions.create(
+    {
+      model: "llama-3.1-8b-instant",
+      messages: groqMessages,
+      stream: true,
+    },
+    { signal }
+  );
+
+  for await (const chunk of stream) {
+    if (signal?.aborted) return;
+    const text = chunk.choices[0]?.delta?.content || "";
+    if (text) yield text;
+  }
+}
+
 export async function* streamChat(
   history: RawMessage[],
   newMessage: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  provider: ProviderType = "auto"
 ): AsyncGenerator<string, void, unknown> {
-  const geminiApiKey = process.env.GEMINI_API_KEY;
-  const groqApiKey = process.env.GROQ_API_KEY;
+  const geminiKey = process.env.GEMINI_API_KEY;
+  const groqKey = process.env.GROQ_API_KEY;
 
-  // 1. Primary Engine: Gemini
-  if (geminiApiKey) {
-    try {
-      const genAI = new GoogleGenerativeAI(geminiApiKey);
-      const model = genAI.getGenerativeModel({
-        model: "gemini-2.5-flash",
-        systemInstruction: SYSTEM_PROMPT,
-      });
-
-      const formattedHistory = history
-        .filter((msg) => msg.role === "user" || msg.role === "model" || msg.role === "assistant")
-        .map((msg) => ({
-          role: msg.role === "assistant" ? "model" : msg.role,
-          parts: [{ text: msg.content }],
-        }));
-
-      const chatSession = model.startChat({
-        history: formattedHistory,
-      });
-
-      const resultStream = await chatSession.sendMessageStream(newMessage);
-
-      for await (const chunk of resultStream.stream) {
-        if (signal?.aborted) return;
-        const text = chunk.text();
-        if (text) yield text;
-      }
-      return;
-    } catch (err) {
-      console.warn("Gemini stream failed, attempting Groq fallback:", err);
+  // 1. Explicit Groq Selected
+  if (provider === "groq") {
+    if (!groqKey) {
+      throw new Error("GROQ_API_KEY is not configured in Vercel environment variables.");
     }
-  }
-
-  // 2. Zero-Downtime Fallback: Groq
-  if (groqApiKey) {
-    const groq = new Groq({ apiKey: groqApiKey });
-
-    const groqMessages = [
-      { role: "system" as const, content: SYSTEM_PROMPT },
-      ...history.map((m) => ({
-        role: (m.role === "model" ? "assistant" : m.role === "system" ? "system" : "user") as
-          | "user"
-          | "assistant"
-          | "system",
-        content: m.content,
-      })),
-      { role: "user" as const, content: newMessage },
-    ];
-
-    const stream = await groq.chat.completions.create(
-      {
-        model: "llama-3.1-8b-instant",
-        messages: groqMessages,
-        stream: true,
-      },
-      { signal }
-    );
-
-    for await (const chunk of stream) {
-      if (signal?.aborted) return;
-      const text = chunk.choices[0]?.delta?.content || "";
-      if (text) yield text;
-    }
+    yield* streamFromGroq(history, newMessage, groqKey, signal);
     return;
   }
 
-  throw new Error("No operational LLM provider keys configured (GEMINI_API_KEY or GROQ_API_KEY).");
+  // 2. Explicit Gemini Selected
+  if (provider === "gemini") {
+    if (!geminiKey) {
+      throw new Error("GEMINI_API_KEY is not configured in Vercel environment variables.");
+    }
+    yield* streamFromGemini(history, newMessage, geminiKey, signal);
+    return;
+  }
+
+  // 3. Auto Mode: Primary Gemini with Groq fallback
+  if (geminiKey) {
+    try {
+      yield* streamFromGemini(history, newMessage, geminiKey, signal);
+      return;
+    } catch (geminiError) {
+      console.warn("Gemini engine error, triggering Groq fallback...", geminiError);
+    }
+  }
+
+  if (groqKey) {
+    yield* streamFromGroq(history, newMessage, groqKey, signal);
+    return;
+  }
+
+  throw new Error("Neither GEMINI_API_KEY nor GROQ_API_KEY is set in Vercel.");
 }

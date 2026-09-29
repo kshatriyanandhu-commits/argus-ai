@@ -1,999 +1,311 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Activity,
-  ArrowDown,
-  ArrowRight,
-  BrainCircuit,
-  Check,
-  Code2,
-  Compass,
-  Copy,
-  FilePenLine,
-  HelpCircle,
-  Lightbulb,
-  Menu,
-  MessageCircle,
-  Mic,
-  MicOff,
-  MoreHorizontal,
-  Plus,
-  Search,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  Square,
-  Trash2,
-  Volume2,
-  VolumeX,
-  X,
-  ExternalLink,
-} from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 
-type Conversation = { id: string; title: string; createdAt: string; updatedAt: string };
-type ChatMessage = { id: string; role: string; content: string; createdAt: string; error?: boolean };
-type SpeechResult = { results: ArrayLike<ArrayLike<{ transcript: string }>> };
-type Recognition = {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  onresult: ((event: SpeechResult) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
+type ProviderType = "auto" | "gemini" | "groq";
 
-type Starter = { icon: typeof Lightbulb; title: string; description: string; prompt: string; color: string };
-const starters: Starter[] = [
-  { icon: Lightbulb, title: "Think it through", description: "Make a confident decision", prompt: "Help me think through a difficult decision. Ask me what my options are, then help me weigh the pros and cons.", color: "mint" },
-  { icon: FilePenLine, title: "Create something", description: "Turn an idea into words", prompt: "Help me write something compelling. Ask me what I want to create and who it's for.", color: "violet" },
-  { icon: Code2, title: "Build & debug", description: "Solve a technical challenge", prompt: "Help me solve a coding challenge. Ask me what I'm building and where I'm stuck.", color: "blue" },
-  { icon: Compass, title: "Explore an idea", description: "Get curious about anything", prompt: "I'd like to explore an interesting idea. Suggest three thought-provoking topics we could dive into.", color: "orange" },
-];
-
-const quickActions = [
-  { icon: BrainCircuit, label: "Decision lab", prompt: "I need help making a decision. Walk me through the FOR, AGAINST, and your VERDICT." },
-  { icon: FilePenLine, label: "Writing studio", prompt: "Help me improve my writing. Ask me what I'm working on." },
-  { icon: Code2, label: "Code assistant", prompt: "Be my coding assistant. Ask me about the problem I am solving." },
-];
-
-function ArgusMark({ small = false }: { small?: boolean }) {
-  return (
-    <div className={`argus-mark ${small ? "argus-mark-small" : ""}`}>
-      <span className="mark-diamond" />
-      <span className="mark-core" />
-    </div>
-  );
+interface Conversation {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-function NeuralOrb({ compact = false, active = false }: { compact?: boolean; active?: boolean }) {
-  return (
-    <div className={`neural-orb ${compact ? "orb-compact" : ""} ${active ? "orb-active" : ""}`} aria-hidden="true">
-      <div className="orb-ambient" />
-      <div className="orb-outer-ring" />
-      <div className="orb-orbit orb-orbit-one" />
-      <div className="orb-orbit orb-orbit-two" />
-      <div className="orb-orbit orb-orbit-three" />
-      <div className="orb-globe">
-        <div className="orb-globe-inner" />
-        <div className="orb-shine" />
-        <div className="orb-lines" />
-      </div>
-      <span className="orbit-spark orbit-spark-one" />
-      <span className="orbit-spark orbit-spark-two" />
-    </div>
-  );
+interface Message {
+  id: string;
+  role: "user" | "model";
+  content: string;
 }
 
-function FormattedMessage({ text }: { text: string }) {
-  const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null);
-
-  const copyCode = (code: string, id: string) => {
-    navigator.clipboard.writeText(code);
-    setCopiedSnippet(id);
-    setTimeout(() => setCopiedSnippet(null), 2000);
-  };
-
-  const parts = text.split(/(```[\s\S]*?```)/g);
-
-  return (
-    <div className="message-text">
-      {parts.map((part, index) => {
-        if (part.startsWith("```") && part.endsWith("```")) {
-          const lines = part.slice(3, -3).trim().split("\n");
-          const firstLine = lines[0].trim();
-          const hasLang = /^[a-zA-Z0-9_-]+$/.test(firstLine);
-          const lang = hasLang ? firstLine : "text";
-          const code = hasLang ? lines.slice(1).join("\n") : lines.join("\n");
-          const snippetId = `snippet-${index}`;
-
-          return (
-            <div
-              key={index}
-              style={{
-                background: "#080c14",
-                border: "1px solid #1f2b38",
-                borderRadius: "8px",
-                margin: "10px 0",
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "5px 12px",
-                  background: "#0e1520",
-                  borderBottom: "1px solid #1f2b38",
-                  fontSize: "11px",
-                  color: "#7e91a5",
-                }}
-              >
-                <span>{lang}</span>
-                <button
-                  type="button"
-                  onClick={() => copyCode(code, snippetId)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "inherit",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "4px",
-                    fontSize: "11px",
-                  }}
-                >
-                  {copiedSnippet === snippetId ? <Check size={12} /> : <Copy size={12} />}
-                  {copiedSnippet === snippetId ? "Copied" : "Copy"}
-                </button>
-              </div>
-              <pre
-                style={{
-                  margin: 0,
-                  padding: "12px",
-                  overflowX: "auto",
-                  fontSize: "12px",
-                  lineHeight: "1.6",
-                  color: "#dff6f5",
-                  fontFamily: "monospace",
-                }}
-              >
-                <code>{code}</code>
-              </pre>
-            </div>
-          );
-        }
-
-        const lines = part.split("\n");
-        return (
-          <span key={index}>
-            {lines.map((line, lIdx) => {
-              const formattedLine = line.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((segment, sIdx) => {
-                if (segment.startsWith("**") && segment.endsWith("**")) {
-                  return <strong key={sIdx}>{segment.slice(2, -2)}</strong>;
-                }
-                if (segment.startsWith("`") && segment.endsWith("`")) {
-                  return (
-                    <code
-                      key={sIdx}
-                      style={{
-                        background: "#182432",
-                        padding: "2px 5px",
-                        borderRadius: "4px",
-                        color: "#8cf6e9",
-                        fontSize: "0.92em",
-                      }}
-                    >
-                      {segment.slice(1, -1)}
-                    </code>
-                  );
-                }
-                return segment;
-              });
-
-              return (
-                <span key={lIdx}>
-                  {formattedLine}
-                  {lIdx < lines.length - 1 && <br />}
-                </span>
-              );
-            })}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-function DebateContent({ text }: { text: string }) {
-  const match = text.match(/(?:^|\n)\s*FOR:\s*([\s\S]*?)(?=\n\s*AGAINST:|\n\s*VERDICT:|$)/i);
-  const against = text.match(/(?:^|\n)\s*AGAINST:\s*([\s\S]*?)(?=\n\s*VERDICT:|$)/i);
-  const verdict = text.match(/(?:^|\n)\s*VERDICT:\s*([\s\S]*)$/i);
-  if (match && (against || verdict)) {
-    return (
-      <div className="debate-stack">
-        <div className="debate-card debate-for">
-          <div className="debate-heading">
-            <span className="debate-bullet" /> FOR <span>THE UPSIDE</span>
-          </div>
-          <FormattedMessage text={match[1].trim()} />
-        </div>
-        {against && (
-          <div className="debate-card debate-against">
-            <div className="debate-heading">
-              <span className="debate-bullet" /> AGAINST <span>THE TRADE-OFFS</span>
-            </div>
-            <FormattedMessage text={against[1].trim()} />
-          </div>
-        )}
-        {verdict && (
-          <div className="debate-card debate-verdict">
-            <div className="debate-heading">
-              <span className="debate-bullet" /> VERDICT <span>THE CALL</span>
-            </div>
-            <FormattedMessage text={verdict[1].trim()} />
-          </div>
-        )}
-      </div>
-    );
-  }
-  return <FormattedMessage text={text} />;
-}
-
-export default function HomePage() {
+export default function ArgusChat() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [search, setSearch] = useState("");
-  const [configured, setConfigured] = useState<boolean | null>(null);
-  const [model, setModel] = useState("llama3.2");
-  const [provider, setProvider] = useState<"ollama" | "gemini">("ollama");
-  const [connectionIssue, setConnectionIssue] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
-  const [listening, setListening] = useState(false);
-  const [speechLang, setSpeechLang] = useState<"en-IN" | "te-IN">("en-IN");
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [toast, setToast] = useState("");
-  const [showScroll, setShowScroll] = useState(false);
-  const [elapsed, setElapsed] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [provider, setProvider] = useState<ProviderType>("auto");
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const recognitionRef = useRef<Recognition | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const activeIdRef = useRef<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    activeIdRef.current = activeId;
-  }, [activeId]);
-
-  useEffect(() => {
-    fetch("/api/conversations")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.conversations) setConversations(data.conversations);
-        if (typeof data.configured === "boolean") setConfigured(data.configured);
-        if (data.model) setModel(data.model);
-        if (data.provider) setProvider(data.provider);
-        if (typeof data.issue === "string") setConnectionIssue(data.issue);
-      })
-      .catch(() => setToast("Could not connect to the server."));
+    fetchConversations();
   }, []);
 
   useEffect(() => {
-    if (toast) {
-      const timer = setTimeout(() => setToast(""), 4500);
-      return () => clearTimeout(timer);
-    }
-  }, [toast]);
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && !showScroll) el.scrollTop = el.scrollHeight;
-  }, [messages, showScroll]);
-
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-      if (typeof window !== "undefined") window.speechSynthesis?.cancel();
-    };
-  }, []);
-
-  const reloadList = useCallback(async () => {
+  async function fetchConversations() {
     try {
-      const r = await fetch("/api/conversations");
-      const data = await r.json();
-      if (data.conversations) setConversations(data.conversations);
-    } catch {
-      /* Keep list untouched */
-    }
-  }, []);
-
-  const newChat = () => {
-    abortRef.current?.abort();
-    activeIdRef.current = null;
-    setActiveId(null);
-    setMessages([]);
-    setInput("");
-    setSidebarOpen(false);
-    setElapsed(null);
-    setTimeout(() => textareaRef.current?.focus(), 0);
-  };
-
-  const openConversation = async (id: string) => {
-    if (activeIdRef.current === id) {
-      setSidebarOpen(false);
-      return;
-    }
-    abortRef.current?.abort();
-    activeIdRef.current = id;
-    setActiveId(id);
-    setMessages([]);
-    setLoadingHistory(true);
-    setSidebarOpen(false);
-    setElapsed(null);
-    try {
-      const r = await fetch(`/api/conversations?id=${id}`);
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error);
-      if (activeIdRef.current === id) setMessages(data.messages);
-    } catch {
-      setToast("Could not load this conversation.");
-    } finally {
-      setLoadingHistory(false);
-    }
-  };
-
-  const deleteConversation = async (id: string) => {
-    if (!window.confirm("Delete this conversation and all its messages?")) return;
-    try {
-      const r = await fetch(`/api/conversations?id=${id}`, { method: "DELETE" });
-      if (!r.ok) throw new Error();
-      setConversations((prev) => prev.filter((c) => c.id !== id));
-      if (activeIdRef.current === id) newChat();
-      setToast("Conversation deleted.");
-    } catch {
-      setToast("Could not delete conversation.");
-    }
-  };
-
-  const speak = (text: string) => {
-    if (!("speechSynthesis" in window)) {
-      setToast("Speech playback is not supported in this browser.");
-      return;
-    }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text.replace(/\b(FOR|AGAINST|VERDICT):/g, "$1."));
-    utterance.rate = 1.02;
-    utterance.lang = /[\u0C00-\u0C7F]/.test(text) ? "te-IN" : "en-IN";
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const toggleMic = () => {
-    if (listening && recognitionRef.current) {
-      recognitionRef.current.stop();
-      setListening(false);
-      return;
-    }
-    const win = window as Window & {
-      SpeechRecognition?: new () => Recognition;
-      webkitSpeechRecognition?: new () => Recognition;
-    };
-    const RecognitionClass = win.SpeechRecognition || win.webkitSpeechRecognition;
-    if (!RecognitionClass) {
-      setToast("Voice input is not supported here. Try Chrome or Edge.");
-      return;
-    }
-    try {
-      const recognition = new RecognitionClass();
-      recognition.lang = speechLang;
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.onresult = (event) => {
-        setInput(event.results[0][0].transcript);
-        textareaRef.current?.focus();
-      };
-      recognition.onerror = () => {
-        setListening(false);
-        setToast("Microphone unavailable. Check your browser permissions.");
-      };
-      recognition.onend = () => setListening(false);
-      recognitionRef.current = recognition;
-      recognition.start();
-      setListening(true);
-    } catch {
-      setToast("Could not start microphone. Check your browser permissions.");
-    }
-  };
-
-  const sendMessage = async (messageOverride?: string) => {
-    const text = (messageOverride ?? input).trim();
-    if (!text || loading) return;
-    setInput("");
-    setLoading(true);
-    setElapsed(null);
-    setShowScroll(false);
-
-    let id = activeIdRef.current;
-    try {
-      if (!id) {
-        const created = await fetch("/api/conversations", { method: "POST" });
-        const data = await created.json();
-        if (!created.ok) throw new Error(data.error || "Could not create conversation.");
-        id = data.conversation.id;
-        activeIdRef.current = id;
-        setActiveId(id);
-        setConversations((prev) => [data.conversation, ...prev]);
+      const res = await fetch("/api/conversations");
+      const data = await res.json();
+      if (data.conversations && Array.isArray(data.conversations)) {
+        setConversations(data.conversations);
+        if (data.conversations.length > 0 && !activeConversationId) {
+          setActiveConversationId(data.conversations[0].id);
+        }
       }
+    } catch (err) {
+      console.error("Failed to load conversations:", err);
+    }
+  }
 
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: "user", content: text, createdAt: new Date().toISOString() },
-        { id: "streaming", role: "model", content: "", createdAt: new Date().toISOString() },
-      ]);
-
-      const started = performance.now();
-      const controller = new AbortController();
-      abortRef.current = controller;
-
-      const res = await fetch("/api/chat", {
+  async function handleNewConversation() {
+    try {
+      const res = await fetch("/api/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId: id, message: text }),
-        signal: controller.signal,
+        body: JSON.stringify({ title: "New deliberation" }),
+      });
+      const data = await res.json();
+      if (data.conversation) {
+        setConversations((prev) => [data.conversation, ...prev]);
+        setActiveConversationId(data.conversation.id);
+        setMessages([]);
+        setErrorMessage(null);
+      }
+    } catch (err) {
+      console.error("Failed to create conversation:", err);
+    }
+  }
+
+  async function sendMessage() {
+    const trimmed = input.trim();
+    if (!trimmed || isLoading) return;
+
+    setErrorMessage(null);
+    setInput("");
+
+    let convId = activeConversationId;
+    if (!convId) {
+      try {
+        const createRes = await fetch("/api/conversations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: trimmed.slice(0, 30) }),
+        });
+        const createData = await createRes.json();
+        if (createData.conversation?.id) {
+          convId = createData.conversation.id;
+          setConversations((prev) => [createData.conversation, ...prev]);
+          setActiveConversationId(convId);
+        } else {
+          setErrorMessage("Failed to initialize conversation session.");
+          return;
+        }
+      } catch {
+        setErrorMessage("Network error initializing session.");
+        return;
+      }
+    }
+
+    const userMsg: Message = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: trimmed,
+    };
+
+    const tempAssistantId = crypto.randomUUID();
+    const assistantMsg: Message = {
+      id: tempAssistantId,
+      role: "model",
+      content: "",
+    };
+
+    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    setIsLoading(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId: convId,
+          message: trimmed,
+          provider: provider,
+        }),
       });
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "The request failed. Please try again.");
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${response.status}`);
       }
-      if (!res.body) throw new Error("No response received from the server.");
 
-      const reader = res.body.getReader();
+      if (!response.body) throw new Error("No response stream available.");
+
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = "";
-      let complete = "";
-
-      const handleEvent = (block: string) => {
-        const line = block.split("\n").find((l) => l.startsWith("data:"));
-        if (!line) return;
-        try {
-          const payload = JSON.parse(line.slice(5).trim());
-          if (payload.error) throw new Error(payload.error);
-          if (payload.token) {
-            complete += payload.token;
-            setMessages((prev) =>
-              prev.map((m) => (m.id === "streaming" ? { ...m, content: complete } : m))
-            );
-          }
-          if (payload.done) {
-            complete = payload.fullText || complete;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === "streaming" ? { ...m, id: crypto.randomUUID(), content: complete } : m
-              )
-            );
-            if (voiceEnabled) speak(complete);
-          }
-        } catch (e) {
-          if (e instanceof SyntaxError) return;
-          throw e;
-        }
-      };
+      let streamBuffer = "";
 
       while (true) {
-        const { done, value } = await reader.read();
+        const { value, done } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop() || "";
-        for (const part of parts) handleEvent(part);
+
+        streamBuffer += decoder.decode(value, { stream: true });
+        const lines = streamBuffer.split("\n\n");
+        streamBuffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const rawData = line.replace(/^data: /, "").trim();
+            if (!rawData) continue;
+            const parsed = JSON.parse(rawData);
+
+            if (parsed.error) {
+              setErrorMessage(parsed.error);
+              break;
+            }
+
+            if (parsed.token) {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === tempAssistantId
+                    ? { ...msg, content: msg.content + parsed.token }
+                    : msg
+                )
+              );
+            }
+          }
+        }
       }
-      if (buffer.trim()) handleEvent(buffer);
-
-      setElapsed(Math.round(performance.now() - started));
-      await reloadList();
-    } catch (error) {
-      const errorText =
-        error instanceof Error && error.name === "AbortError"
-          ? "Response stopped."
-          : error instanceof Error
-          ? error.message
-          : "Something went wrong.";
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === "streaming" ? { ...m, id: crypto.randomUUID(), content: errorText, error: true } : m
-        )
-      );
-      if (errorText === "Response stopped.") setToast("Generation stopped.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error streaming response";
+      setErrorMessage(msg);
     } finally {
-      setLoading(false);
-      abortRef.current = null;
+      setIsLoading(false);
     }
-  };
-
-  const handlePrompt = (prompt: string) => {
-    setInput(prompt);
-    textareaRef.current?.focus();
-    setSidebarOpen(false);
-  };
-
-  const activeConversation = conversations.find((c) => c.id === activeId);
-  const filtered = conversations.filter((c) => c.title.toLowerCase().includes(search.toLowerCase()));
-  const grouped = {
-    today: filtered.filter((c) => new Date(c.updatedAt).toDateString() === new Date().toDateString()),
-    older: filtered.filter((c) => new Date(c.updatedAt).toDateString() !== new Date().toDateString()),
-  };
-
-  const copyMessage = async (message: ChatMessage) => {
-    try {
-      await navigator.clipboard.writeText(message.content);
-      setCopiedId(message.id);
-      setTimeout(() => setCopiedId(null), 2000);
-    } catch {
-      setToast("Could not copy to clipboard.");
-    }
-  };
+  }
 
   return (
-    <div className="app-shell">
-      {sidebarOpen && <button className="mobile-scrim" onClick={() => setSidebarOpen(false)} aria-label="Close menu" />}
-      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
-        <div className="sidebar-top">
-          <button className="brand" onClick={newChat} aria-label="ARGUS home">
-            <ArgusMark />
-            <span className="brand-word">
-              ARGUS<span className="brand-period">.</span>
-            </span>
-            <span className="brand-beta">AI</span>
-          </button>
-          <button className="mobile-close icon-btn" onClick={() => setSidebarOpen(false)} aria-label="Close sidebar">
-            <X size={18} />
-          </button>
-        </div>
-        <button className="new-chat-btn" onClick={newChat}>
-          <Plus size={18} strokeWidth={2.3} />
-          <span>New conversation</span>
-          <span className="new-shortcut">⌘ K</span>
-        </button>
-        <div className="sidebar-scroll">
-          <div className="side-section">
-            <div className="side-label">WORKSPACE</div>
-            <button className={`side-link ${!activeId ? "side-link-active" : ""}`} onClick={newChat}>
-              <MessageCircle size={17} />
-              <span>Overview</span>
+    <div className="flex h-screen w-screen bg-[#070b12] text-zinc-100 font-sans overflow-hidden">
+      {/* Sidebar */}
+      <aside className="w-64 border-r border-cyan-950/40 bg-[#090e17] flex flex-col justify-between p-4">
+        <div>
+          <div className="flex items-center justify-between mb-6">
+            <span className="text-sm font-semibold tracking-wider text-cyan-400">ARGUS</span>
+            <button
+              onClick={handleNewConversation}
+              className="text-xs border border-cyan-700/50 hover:bg-cyan-950/50 text-cyan-300 px-2 py-1 rounded transition"
+            >
+              + New
             </button>
-            {quickActions.map((action) => (
+          </div>
+          <div className="space-y-1 overflow-y-auto max-h-[75vh]">
+            {conversations.map((c) => (
               <button
-                key={action.label}
-                className="side-link"
+                key={c.id}
                 onClick={() => {
-                  newChat();
-                  setTimeout(() => handlePrompt(action.prompt), 0);
+                  setActiveConversationId(c.id);
+                  setMessages([]);
                 }}
+                className={`w-full text-left text-xs px-3 py-2 rounded truncate transition ${
+                  activeConversationId === c.id
+                    ? "bg-cyan-950/60 text-cyan-200 border border-cyan-800/40"
+                    : "text-zinc-400 hover:bg-zinc-800/30"
+                }`}
               >
-                <action.icon size={17} />
-                <span>{action.label}</span>
+                {c.title}
               </button>
             ))}
           </div>
-          <div className="side-divider" />
-          <div className="history-title">
-            <div className="side-label">YOUR CONVERSATIONS</div>
-            <span className="history-count">{conversations.length}</span>
-          </div>
-          <div className="search-box">
-            <Search size={15} />
-            <input
-              aria-label="Search conversations"
-              placeholder="Search conversations..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            <span>⌘ F</span>
-          </div>
-          {filtered.length === 0 ? (
-            <div className="history-empty">{search ? "No matching conversations" : "Your conversations will appear here."}</div>
-          ) : (
-            <div className="history-list">
-              {(["today", "older"] as const).map(
-                (group) =>
-                  grouped[group].length > 0 && (
-                    <div key={group}>
-                      <div className="history-group-label">{group === "today" ? "TODAY" : "PREVIOUS"}</div>
-                      {grouped[group].map((c) => (
-                        <div key={c.id} className={`history-row ${activeId === c.id ? "history-row-active" : ""}`}>
-                          <button className="history-open" onClick={() => openConversation(c.id)}>
-                            <MessageCircle size={15} />
-                            <span>{c.title}</span>
-                          </button>
-                          <button
-                            className="history-delete"
-                            onClick={() => deleteConversation(c.id)}
-                            aria-label={`Delete ${c.title}`}
-                            title="Delete conversation"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )
-              )}
-            </div>
-          )}
         </div>
-        <div className="sidebar-bottom">
-          <div className="sidebar-plan">
-            <div className="plan-icon">
-              <Sparkles size={16} />
-            </div>
-            <div>
-              <strong>Make room for better ideas</strong>
-              <p>Your thinking partner, always on.</p>
-            </div>
-            <ArrowRight size={15} />
-          </div>
-          <button className="sidebar-profile" onClick={() => setSettingsOpen(true)}>
-            <span className="avatar">OP</span>
-            <span className="profile-name">
-              <strong>Operator</strong>
-              <small>Personal workspace</small>
-            </span>
-            <MoreHorizontal size={18} />
-          </button>
-        </div>
+        <div className="text-[11px] text-zinc-500">Autonomous Reasoning Companion</div>
       </aside>
 
-      <div className="main-area">
-        <header className="topbar">
-          <div className="topbar-left">
-            <button className="menu-btn icon-btn" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
-              <Menu size={20} />
-            </button>
-            <div className="breadcrumb">
-              <span>Workspace</span>
-              <span className="breadcrumb-slash">/</span>
-              <strong>{activeConversation?.title || "New conversation"}</strong>
-            </div>
-          </div>
-          <div className="topbar-right">
-            <div className={`connection-status ${configured === false ? "connection-offline" : ""}`}>
-              <span className="connection-dot" />
-              {configured === false ? "SETUP REQUIRED" : configured === null ? "CONNECTING" : "SYSTEM ONLINE"}
-            </div>
-            <div className="topbar-separator" />
-            <button className="top-icon" onClick={() => setSettingsOpen(true)} title="Settings and API setup" aria-label="Settings">
-              <Settings2 size={18} />
-            </button>
-            <button className="top-avatar" onClick={() => setSettingsOpen(true)} aria-label="Profile and settings">
-              OP
-            </button>
-          </div>
+      {/* Main Deliberation Panel */}
+      <main className="flex-1 flex flex-col justify-between relative bg-radial-at-t from-[#0d1624] via-[#070b12] to-[#05070c]">
+        {/* Header */}
+        <header className="py-4 text-center">
+          <div className="text-[11px] font-mono tracking-widest text-cyan-500/80">ARGUS / CONVERSATION</div>
+          <h1 className="text-lg font-medium text-zinc-200">New deliberation</h1>
+          <p className="text-xs text-zinc-500">Ask anything. Think better, together.</p>
         </header>
 
-        <div className="workspace">
-          <div className="workspace-grid" />
-          {!activeId && messages.length === 0 ? (
-            <div className="welcome-scroll">
-              <div className="welcome-content">
-                <div className="welcome-orb">
-                  <NeuralOrb />
-                </div>
-                <div className="eyebrow">
-                  <span className="eyebrow-line" /> INTELLIGENCE, AMPLIFIED <span className="eyebrow-line" />
-                </div>
-                <h1>
-                  Good to see you, <span>operator.</span>
-                </h1>
-                <p className="hero-description">
-                  What's on your mind? Big decisions, bold ideas, or the little things in between — let's figure it out together.
-                </p>
-                <div className="starter-header">
-                  <span>START SOMEWHERE</span>
-                  <span className="starter-line" />
-                </div>
-                <div className="starter-grid">
-                  {starters.map((starter) => (
-                    <button
-                      key={starter.title}
-                      className={`starter-card starter-${starter.color}`}
-                      onClick={() => handlePrompt(starter.prompt)}
-                    >
-                      <span className="starter-icon">
-                        <starter.icon size={20} strokeWidth={1.8} />
-                      </span>
-                      <span className="starter-copy">
-                        <strong>{starter.title}</strong>
-                        <small>{starter.description}</small>
-                      </span>
-                      <ArrowRight size={17} className="starter-arrow" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : (
+        {/* Message Viewport */}
+        <div className="flex-1 overflow-y-auto px-6 max-w-3xl w-full mx-auto space-y-4">
+          {messages.map((m) => (
             <div
-              className="conversation-scroll"
-              ref={scrollRef}
-              onScroll={(e) => {
-                const el = e.currentTarget;
-                setShowScroll(el.scrollHeight - el.scrollTop - el.clientHeight > 140);
-              }}
+              key={m.id}
+              className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}
             >
-              <div className="conversation-inner">
-                <div className="conversation-start">
-                  <NeuralOrb compact />
-                  <div className="conversation-kicker">ARGUS / CONVERSATION</div>
-                  <h2>{activeConversation?.title || "New conversation"}</h2>
-                  <p>Ask anything. Think better, together.</p>
-                </div>
-                {loadingHistory ? (
-                  <div className="history-loading">Loading conversation...</div>
-                ) : (
-                  messages.map((m) => (
-                    <div className={`chat-message ${m.role === "user" ? "chat-user" : "chat-assistant"}`} key={m.id}>
-                      <div className="message-avatar">{m.role === "user" ? "OP" : <ArgusMark small />}</div>
-                      <div className="message-content">
-                        <div className="message-top">
-                          <strong>{m.role === "user" ? "You" : "ARGUS"}</strong>
-                          <span>
-                            {new Date(m.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-                          </span>
-                          {m.error && <span className="error-label">ERROR</span>}
-                        </div>
-                        <div className={`message-body ${m.error ? "message-error" : ""}`}>
-                          {m.content ? (
-                            m.role === "model" && !m.error ? (
-                              <DebateContent text={m.content} />
-                            ) : (
-                              <div className="message-text">{m.content}</div>
-                            )
-                          ) : (
-                            <div className="typing-indicator">
-                              <span />
-                              <span />
-                              <span />
-                            </div>
-                          )}
-                        </div>
-                        {m.role === "model" && m.content && !m.error && (
-                          <div className="message-actions">
-                            <button onClick={() => copyMessage(m)} title="Copy response">
-                              {copiedId === m.id ? <Check size={14} /> : <Copy size={14} />}
-                              {copiedId === m.id ? "Copied" : "Copy"}
-                            </button>
-                            <button onClick={() => speak(m.content)} title="Read aloud">
-                              <Volume2 size={14} /> Listen
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
+              <span className="text-[10px] text-zinc-500 mb-1">
+                {m.role === "user" ? "You" : "ARGUS"}
+              </span>
+              <div
+                className={`text-sm px-4 py-2.5 rounded-xl max-w-xl whitespace-pre-wrap leading-relaxed ${
+                  m.role === "user"
+                    ? "bg-cyan-950/80 border border-cyan-800/50 text-cyan-50"
+                    : "bg-zinc-900/90 border border-zinc-800 text-zinc-200"
+                }`}
+              >
+                {m.content}
               </div>
             </div>
-          )}
+          ))}
 
-          {showScroll && messages.length > 0 && (
-            <button
-              className="scroll-bottom"
-              onClick={() => {
-                if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-                setShowScroll(false);
-              }}
-              aria-label="Scroll to bottom"
-            >
-              <ArrowDown size={17} />
-            </button>
+          {/* Error Banner */}
+          {errorMessage && (
+            <div className="p-3 text-xs rounded border border-rose-900/60 bg-rose-950/40 text-rose-300">
+              <span className="font-semibold">Error: </span>
+              {errorMessage}
+            </div>
           )}
+          <div ref={messagesEndRef} />
+        </div>
 
-          <div className="composer-zone">
-            <div className="composer-wrap">
-              {configured === false && (
-                <button className="setup-alert" onClick={() => setSettingsOpen(true)}>
-                  <span className="setup-alert-dot" />
-                  {provider === "ollama" ? "Local model not ready" : "Gemini API key not configured"}
-                  <span>
-                    View setup guide <ArrowRight size={13} />
-                  </span>
-                </button>
-              )}
-              <form
-                className={`composer ${listening ? "composer-listening" : ""}`}
-                onSubmit={(e) => {
+        {/* Prompt Input Form & Engine Selector */}
+        <div className="max-w-3xl w-full mx-auto px-6 pb-6">
+          <div className="relative border border-cyan-900/60 bg-zinc-900/60 backdrop-blur rounded-xl p-2.5 shadow-2xl focus-within:border-cyan-500 transition">
+            <textarea
+              rows={2}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   sendMessage();
-                }}
+                }
+              }}
+              placeholder="Ask anything, or share what's on your mind..."
+              className="w-full bg-transparent resize-none text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none px-2 py-1"
+            />
+            <div className="flex items-center justify-between pt-2 border-t border-zinc-800/60 px-2 text-xs">
+              <span className="text-[11px] text-zinc-500">Press Enter to send</span>
+              <button
+                disabled={isLoading || !input.trim()}
+                onClick={sendMessage}
+                className="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-30 disabled:hover:bg-cyan-600 text-zinc-950 font-medium rounded transition"
               >
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      sendMessage();
-                    }
-                  }}
-                  placeholder={
-                    listening
-                      ? speechLang === "te-IN"
-                        ? "వినడం జరుగుతోంది (Listening in Telugu)..."
-                        : "Listening to your voice..."
-                      : "Ask anything, or share what's on your mind..."
-                  }
-                  rows={1}
-                  maxLength={12000}
-                  aria-label="Message ARGUS"
-                />
-                <div className="composer-bottom">
-                  <div className="composer-tools">
-                    <button
-                      type="button"
-                      className={`tool-button ${listening ? "tool-active" : ""}`}
-                      onClick={toggleMic}
-                      title="Voice input"
-                    >
-                      {listening ? <MicOff size={17} /> : <Mic size={17} />}
-                      <span>{listening ? "Listening" : "Voice input"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="tool-button"
-                      onClick={() => setSpeechLang((prev) => (prev === "en-IN" ? "te-IN" : "en-IN"))}
-                      title="Toggle speech language"
-                      style={{ fontSize: "10px", fontWeight: "700", padding: "4px 6px" }}
-                    >
-                      <span>{speechLang === "en-IN" ? "EN" : "TE"}</span>
-                    </button>
-                    <span className="tool-divider" />
-                    <button
-                      type="button"
-                      className={`tool-button ${voiceEnabled ? "tool-active" : ""}`}
-                      onClick={() => {
-                        setVoiceEnabled(!voiceEnabled);
-                        window.speechSynthesis?.cancel();
-                      }}
-                      title="Toggle automatic voice replies"
-                    >
-                      {voiceEnabled ? <Volume2 size={17} /> : <VolumeX size={17} />}
-                      <span>Voice {voiceEnabled ? "on" : "off"}</span>
-                    </button>
-                  </div>
-                  <div className="composer-right">
-                    <span className="enter-hint">↵ to send</span>
-                    {loading ? (
-                      <button
-                        type="button"
-                        className="send-button stop-button"
-                        onClick={() => abortRef.current?.abort()}
-                        title="Stop generating"
-                      >
-                        <Square size={15} fill="currentColor" />
-                      </button>
-                    ) : (
-                      <button type="submit" className="send-button" disabled={!input.trim()} title="Send message">
-                        <ArrowRight size={20} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </form>
-              <div className="composer-meta">
-                <span>
-                  <ShieldCheck size={13} /> Private to this browser
-                </span>
-                <span>
-                  {elapsed !== null
-                    ? `Response in ${(elapsed / 1000).toFixed(1)}s`
-                    : "ARGUS can make mistakes. Verify important details."}
-                </span>
-                <span className="model-label">
-                  <span /> {model}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {settingsOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setSettingsOpen(false);
-          }}
-        >
-          <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
-            <div className="modal-header">
-              <div>
-                <span className="modal-kicker">WORKSPACE SETTINGS</span>
-                <h2>Connection & preferences</h2>
-              </div>
-              <button className="icon-btn" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
-                <X size={20} />
+                {isLoading ? "..." : "Send"}
               </button>
             </div>
-            <div className="modal-body">
-              <div className="settings-status">
-                <div className={`settings-status-icon ${configured ? "status-good" : "status-warn"}`}>
-                  <Activity size={21} />
-                </div>
-                <div>
-                  <strong>
-                    {configured
-                      ? `${provider === "ollama" ? "Local Ollama" : "Gemini"} connection ready`
-                      : `${provider === "ollama" ? "Local model" : "Gemini"} setup needed`}
-                  </strong>
-                  <p>
-                    {configured
-                      ? `Using ${model} via ${provider === "ollama" ? "Ollama (no API key)" : "Gemini"}.`
-                      : connectionIssue}
-                  </p>
-                </div>
-                <span className={`settings-pill ${configured ? "pill-good" : "pill-warn"}`}>
-                  {configured ? "READY" : "ACTION NEEDED"}
-                </span>
-              </div>
-              <div className="settings-section">
-                <h3>Run without API keys · Ollama</h3>
-                <p>
-                  ARGUS defaults to a local model. No Gemini account, expiring keys, or per-request quota needed.
-                  Install{" "}
-                  <a href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">
-                    Ollama <ExternalLink size={12} />
-                  </a>{" "}
-                  on the same machine as the app server.
-                </p>
-                <ol>
-                  <li>
-                    Download a model: <code>ollama pull llama3.2</code>
-                  </li>
-                  <li>
-                    Start Ollama (if not already running): <code>ollama serve</code>
-                  </li>
-                  <li>Refresh this page. Set <code>OLLAMA_MODEL</code> if you downloaded another model.</li>
-                </ol>
-                <div className="settings-tip">
-                  <HelpCircle size={17} />
-                  <span>
-                    If ARGUS is hosted remotely, Ollama must be reachable from that server. Set <code>OLLAMA_BASE_URL</code> to a reachable private endpoint. Do not expose Ollama publicly without authentication.
-                  </span>
-                </div>
-              </div>
-              <div className="settings-section">
-                <h3>Use Gemini</h3>
-                <p>
-                  Set <code>AI_PROVIDER=gemini</code> and a server-side <code>GEMINI_API_KEY</code>. The default model is <code>gemini-2.5-flash</code>.
-                </p>
-                <p>Keep the key on the server, rotate any compromised ones, and verify access in Google AI Studio.</p>
-              </div>
+          </div>
+
+          {/* Engine Selector Footer */}
+          <div className="flex items-center justify-between text-[11px] text-zinc-500 mt-3 px-1">
+            <span>ARGUS can make mistakes. Verify important details.</span>
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value as ProviderType)}
+                className="bg-transparent border border-zinc-800 text-zinc-300 rounded px-2 py-0.5 focus:outline-none focus:border-cyan-600 cursor-pointer"
+              >
+                <option value="auto" className="bg-[#090e17] text-zinc-200">
+                  Auto (Gemini $\rightarrow$ Groq)
+                </option>
+                <option value="gemini" className="bg-[#090e17] text-zinc-200">
+                  Gemini 2.5 Flash
+                </option>
+                <option value="groq" className="bg-[#090e17] text-zinc-200">
+                  Groq (Llama 3.1 8B)
+                </option>
+              </select>
             </div>
           </div>
         </div>
-      )}
-
-      {toast && (
-        <div className="toast">
-          <Activity size={16} />
-          {toast}
-          <button onClick={() => setToast("")} aria-label="Dismiss notification">
-            <X size={14} />
-          </button>
-        </div>
-      )}
+      </main>
     </div>
   );
 }

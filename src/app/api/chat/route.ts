@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/db";
 import { argusConversations, argusMessages } from "@/db/schema";
-import { streamChat, RawMessage } from "@/lib/runtime";
+import { streamChat, RawMessage, ProviderType } from "@/lib/runtime";
 import { eq, asc } from "drizzle-orm";
 
 export const runtime = "nodejs";
@@ -16,16 +16,16 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const { conversationId, message } = await req.json();
+    const { conversationId, message, provider = "auto" } = await req.json();
 
     if (!conversationId || !message || typeof message !== "string") {
-      return new Response(JSON.stringify({ error: "Missing conversationId or message payload." }), {
+      return new Response(JSON.stringify({ error: "Missing conversationId or message." }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    // 1. Fetch previous messages for conversation context
+    // Load conversation history for context
     const previousMessages = await db
       .select()
       .from(argusMessages)
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
       content: m.content,
     }));
 
-    // 2. Persist the incoming user message
+    // Record incoming user message
     await db.insert(argusMessages).values({
       id: crypto.randomUUID(),
       conversationId,
@@ -45,24 +45,29 @@ export async function POST(req: NextRequest) {
       content: message.trim(),
     });
 
-    // 3. Touch updated timestamp
+    // Touch conversation updated timestamp
     await db
       .update(argusConversations)
       .set({ updatedAt: new Date() })
       .where(eq(argusConversations.id, conversationId));
 
-    // 4. Stream response
     const encoder = new TextEncoder();
     let completeResponse = "";
 
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          for await (const token of streamChat(history, message, req.signal)) {
+          for await (const token of streamChat(
+            history,
+            message,
+            req.signal,
+            provider as ProviderType
+          )) {
             completeResponse += token;
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ token })}\n\n`));
           }
 
+          // Persist completed assistant message
           if (completeResponse.trim() && db) {
             await db.insert(argusMessages).values({
               id: crypto.randomUUID(),
