@@ -45,7 +45,7 @@ async function* streamFromGemini(
       parts: [{ text: m.content }],
     }));
 
-  const candidateModels = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+  const candidateModels = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"];
   let lastError: unknown = null;
 
   for (const modelName of candidateModels) {
@@ -73,7 +73,7 @@ async function* streamFromGemini(
     }
   }
 
-  throw lastError || new Error("Failed to stream from Gemini models.");
+  throw lastError || new Error("All Gemini candidate models failed.");
 }
 
 async function* streamFromGroq(
@@ -96,32 +96,34 @@ async function* streamFromGroq(
     { role: "user" as const, content: newMessage },
   ];
 
-  let selectedModel = "llama-3.3-70b-versatile";
-  try {
-    const list = await groq.models.list();
-    const activeIds = list.data.map((m) => m.id);
-    const matched =
-      activeIds.find((id) => id.includes("llama-3.3") || id.includes("llama-3.1") || id.includes("llama3")) ||
-      activeIds[0];
-    if (matched) selectedModel = matched;
-  } catch {
-    // Fall back to default if list query fails
+  // Specific, high-speed active Groq production models (terms-free)
+  const candidateModels = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+  let lastError: unknown = null;
+
+  for (const modelId of candidateModels) {
+    try {
+      const stream = await groq.chat.completions.create(
+        {
+          model: modelId,
+          messages: groqMessages,
+          stream: true,
+        },
+        { signal }
+      );
+
+      for await (const chunk of stream) {
+        if (signal?.aborted) return;
+        const text = chunk.choices[0]?.delta?.content || "";
+        if (text) yield text;
+      }
+      return;
+    } catch (err: any) {
+      lastError = err;
+      continue;
+    }
   }
 
-  const stream = await groq.chat.completions.create(
-    {
-      model: selectedModel,
-      messages: groqMessages,
-      stream: true,
-    },
-    { signal }
-  );
-
-  for await (const chunk of stream) {
-    if (signal?.aborted) return;
-    const text = chunk.choices[0]?.delta?.content || "";
-    if (text) yield text;
-  }
+  throw lastError || new Error("Failed to stream from Groq production models.");
 }
 
 export async function* streamChat(
@@ -133,24 +135,31 @@ export async function* streamChat(
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
+  // 1. Primary Engine: Try Gemini first
   if (geminiKey) {
     try {
       yield* streamFromGemini(history, newMessage, geminiKey, signal);
       return;
     } catch (err) {
-      console.warn("Gemini stream failed, activating Groq failover:", err);
+      console.warn("Gemini stream failed, seamlessly falling back to Groq:", err);
     }
   }
 
+  // 2. Failover Engine: If Gemini fails or key missing, run Groq
   if (groqKey) {
     try {
       yield* streamFromGroq(history, newMessage, groqKey, signal);
       return;
     } catch (err) {
-      console.warn("Groq stream failed:", err);
+      console.warn("Groq fallback stream failed:", err);
+      // If Groq fails and Gemini key exists, try Gemini
+      if (geminiKey) {
+        yield* streamFromGemini(history, newMessage, geminiKey, signal);
+        return;
+      }
       throw err;
     }
   }
 
-  throw new Error("No functional API keys configured. Set GEMINI_API_KEY or GROQ_API_KEY in Vercel.");
+  throw new Error("No functional API keys found. Set GEMINI_API_KEY or GROQ_API_KEY in Vercel.");
 }
