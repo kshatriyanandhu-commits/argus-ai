@@ -81,15 +81,19 @@ async function* streamFromGroq(
     { role: "user" as const, content: newMessage },
   ];
 
-  // Try standard supported Groq models
-  const candidateModels = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192", "llama3-8b-8192"];
+  // Active production Groq models (No deprecated versions)
+  const supportedModels = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+  ];
+
   let lastError: unknown = null;
 
-  for (const modelName of candidateModels) {
+  for (const modelId of supportedModels) {
     try {
       const stream = await groq.chat.completions.create(
         {
-          model: modelName,
+          model: modelId,
           messages: groqMessages,
           stream: true,
         },
@@ -102,13 +106,16 @@ async function* streamFromGroq(
         if (text) yield text;
       }
       return;
-    } catch (err) {
+    } catch (err: any) {
       lastError = err;
-      continue;
+      if (err?.status === 400 || err?.status === 404) {
+        continue;
+      }
+      throw err;
     }
   }
 
-  throw lastError || new Error("Failed to stream from Groq models.");
+  throw lastError || new Error("Unable to connect to active Groq models.");
 }
 
 export async function* streamChat(
@@ -132,13 +139,13 @@ export async function* streamChat(
     return;
   }
 
-  // Auto pipeline: Gemini first, Groq fallback
+  // Auto pipeline: Gemini 2.5 Flash primary -> Groq Llama 3.3 failover
   if (geminiKey) {
     try {
       yield* streamFromGemini(history, newMessage, geminiKey, signal);
       return;
     } catch (err) {
-      console.warn("Gemini stream failed, attempting Groq fallback:", err);
+      console.warn("Gemini stream failed, activating Groq failover:", err);
     }
   }
 
@@ -147,5 +154,5 @@ export async function* streamChat(
     return;
   }
 
-  throw new Error("No operational API keys found. Please set GEMINI_API_KEY or GROQ_API_KEY in Vercel.");
+  throw new Error("No API keys found. Please set GEMINI_API_KEY or GROQ_API_KEY in Vercel.");
 }
