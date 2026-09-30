@@ -37,10 +37,6 @@ async function* streamFromGemini(
   signal?: AbortSignal
 ): AsyncGenerator<string, void, unknown> {
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
-    systemInstruction: SYSTEM_PROMPT,
-  });
 
   const formattedHistory = history
     .filter((m) => m.role === "user" || m.role === "model" || m.role === "assistant")
@@ -49,14 +45,35 @@ async function* streamFromGemini(
       parts: [{ text: m.content }],
     }));
 
-  const chatSession = model.startChat({ history: formattedHistory });
-  const resultStream = await chatSession.sendMessageStream(newMessage);
+  const candidateModels = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+  let lastError: unknown = null;
 
-  for await (const chunk of resultStream.stream) {
-    if (signal?.aborted) return;
-    const text = chunk.text();
-    if (text) yield text;
+  for (const modelName of candidateModels) {
+    try {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        systemInstruction: SYSTEM_PROMPT,
+      });
+
+      const chatSession = model.startChat({ history: formattedHistory });
+      const resultStream = await chatSession.sendMessageStream(newMessage);
+
+      for await (const chunk of resultStream.stream) {
+        if (signal?.aborted) return;
+        const text = chunk.text();
+        if (text) yield text;
+      }
+      return;
+    } catch (err: any) {
+      lastError = err;
+      if (err?.message?.includes("404") || err?.status === 404) {
+        continue;
+      }
+      throw err;
+    }
   }
+
+  throw lastError || new Error("Failed to stream from Gemini models.");
 }
 
 async function* streamFromGroq(
@@ -79,7 +96,6 @@ async function* streamFromGroq(
     { role: "user" as const, content: newMessage },
   ];
 
-  // Dynamically inspect available models on this key
   let selectedModel = "llama-3.3-70b-versatile";
   try {
     const list = await groq.models.list();
@@ -89,7 +105,7 @@ async function* streamFromGroq(
       activeIds[0];
     if (matched) selectedModel = matched;
   } catch {
-    // If listing fails, proceed with default
+    // Fall back to default if list query fails
   }
 
   const stream = await groq.chat.completions.create(
@@ -117,39 +133,23 @@ export async function* streamChat(
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
-  // 1. Try Gemini first if auto or gemini requested
-  if (provider === "gemini" || provider === "auto") {
-    if (geminiKey) {
-      try {
-        yield* streamFromGemini(history, newMessage, geminiKey, signal);
-        return;
-      } catch (err) {
-        console.warn("Gemini execution failed, routing to Groq failover:", err);
-        if (provider === "gemini" && !groqKey) throw err;
-      }
+  if (geminiKey) {
+    try {
+      yield* streamFromGemini(history, newMessage, geminiKey, signal);
+      return;
+    } catch (err) {
+      console.warn("Gemini stream failed, activating Groq failover:", err);
     }
   }
 
-  // 2. Try Groq (either explicitly requested, or as seamless fallback)
   if (groqKey) {
     try {
       yield* streamFromGroq(history, newMessage, groqKey, signal);
       return;
     } catch (err) {
-      console.warn("Groq execution failed, routing to Gemini fallback:", err);
-      // If Groq fails and Gemini key is present, fallback to Gemini
-      if (geminiKey) {
-        yield* streamFromGemini(history, newMessage, geminiKey, signal);
-        return;
-      }
+      console.warn("Groq stream failed:", err);
       throw err;
     }
-  }
-
-  // 3. Fallback to Gemini if Groq was requested but failed
-  if (geminiKey) {
-    yield* streamFromGemini(history, newMessage, geminiKey, signal);
-    return;
   }
 
   throw new Error("No functional API keys configured. Set GEMINI_API_KEY or GROQ_API_KEY in Vercel.");
