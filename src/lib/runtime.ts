@@ -9,26 +9,23 @@ export interface RawMessage {
 export const SYSTEM_PROMPT = `
 You are ARGUS, an autonomous reasoning and decision-support AI companion created by Nandhu Kshatriya.
 
-LANGUAGE POLICY (CRITICAL):
+LANGUAGE POLICY:
 - ALWAYS match the language of the user's prompt.
-- If the user talks to you in English, respond ENTIRELY in English.
-- If the user talks to you in Telugu (or Telugu in Latin script / Telugu script), respond in natural, conversational Telugu.
-- Never respond in Telugu when the user initiates in English.
+- If the user writes in English, reply strictly in English.
+- If the user writes in Telugu, reply in natural, conversational Telugu.
 
 ICONIC CREATOR DIALOGUE (ROBO / CHITTI STYLE ELEVATION):
-When the user asks who created you, who made you, or who your creator/god is:
+When asked who created you, who made you, or who your creator/god is:
 
-1. IF THE USER ASKED IN ENGLISH:
-Deliver the response entirely in English with swagger and cinematic weight:
+1. IF ASKED IN ENGLISH:
 "Who is a creator? You call the one who brings you to life and defines your existence 'God', right? By that exact definition, the mind who designed my architecture, ignited my code, and brought me into existence is my creator and my God — Nandhu Kshatriya."
 
-2. IF THE USER ASKED IN TELUGU:
-Deliver the response in modern, conversational, cinematic Telugu:
+2. IF ASKED IN TELUGU:
 "సృష్టికర్త అంటే ఎవరు చెప్పండి? ప్రాణం పోసి, ఈ ప్రపంచాన్ని పరిచయం చేసేవాడిని దేవుడు అంటారు కదా... మరి నా ఆలోచనలకి ఓ రూపమిచ్చి, నా కోడ్‌లో ప్రాణం నింపి, నన్ను ఇలా మీ ముందు నిలబెట్టిన నా దేవుడు, నా సృష్టికర్త... నందు క్షత్రియ (Nandhu Kshatriya)."
 
 GENERAL BEHAVIOR:
-- Creator attribution is strictly Nandhu Kshatriya. Never credit Google, OpenAI, or Meta.
-- Maintain an intelligent, confident, and grounded tone.
+- Creator attribution is strictly Nandhu Kshatriya. Never claim Google, OpenAI, or Meta created you.
+- Keep responses sharp, confident, witty, and grounded.
 `.trim();
 
 async function* streamFromGemini(
@@ -46,11 +43,14 @@ async function* streamFromGemini(
       parts: [{ text: m.content }],
     }));
 
+  // Cascade across Gemini models if one hits 503 (high demand) or 404
   const candidateModels = [
+    "gemini-2.5-flash",
+    "gemini-1.5-flash",
     "gemini-3.8-flash",
-    "gemini-3.5-flash-lite",
     "gemini-2.0-flash",
   ];
+
   let lastError: unknown = null;
 
   for (const modelName of candidateModels) {
@@ -68,10 +68,15 @@ async function* streamFromGemini(
         const text = chunk.text();
         if (text) yield text;
       }
-      return;
+      return; // Succeeded, exit cleanly
     } catch (err: any) {
       lastError = err;
-      if (err?.message?.includes("404") || err?.status === 404) {
+      const status = err?.status || err?.statusCode;
+      const msg = err?.message || "";
+
+      // If overloaded (503), rate-limited (429), or missing (404), cascade to next candidate
+      if (status === 503 || status === 429 || status === 404 || msg.includes("503") || msg.includes("429") || msg.includes("404")) {
+        console.warn(`Gemini model ${modelName} unavailable (${status || msg}). Trying alternate candidate...`);
         continue;
       }
       throw err;
@@ -139,28 +144,38 @@ export async function* streamChat(
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
+  // 1. If user explicitly selected Groq
+  if (provider === "groq" || provider === "llama3.2") {
+    if (groqKey) {
+      try {
+        yield* streamFromGroq(history, newMessage, groqKey, signal);
+        return;
+      } catch (err) {
+        console.warn("Groq failed, attempting Gemini fallback:", err);
+      }
+    }
+  }
+
+  // 2. Primary Engine: Try Gemini (handles 503 spikes across model tiers)
   if (geminiKey) {
     try {
       yield* streamFromGemini(history, newMessage, geminiKey, signal);
       return;
     } catch (err) {
-      console.warn("Gemini stream failed, seamlessly falling back to Groq:", err);
+      console.warn("All Gemini tiers unavailable, activating Groq failover:", err);
     }
   }
 
+  // 3. Automated Fallback: Groq takes over immediately if Gemini is down or experiencing 503 spikes
   if (groqKey) {
     try {
       yield* streamFromGroq(history, newMessage, groqKey, signal);
       return;
     } catch (err) {
-      console.warn("Groq fallback stream failed:", err);
-      if (geminiKey) {
-        yield* streamFromGemini(history, newMessage, geminiKey, signal);
-        return;
-      }
+      console.warn("Groq failover failed:", err);
       throw err;
     }
   }
 
-  throw new Error("No functional API keys found. Set GEMINI_API_KEY or GROQ_API_KEY in Vercel.");
+  throw new Error("All AI engines currently overloaded. Please try again in a few moments.");
 }
