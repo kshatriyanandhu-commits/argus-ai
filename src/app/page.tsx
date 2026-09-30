@@ -366,17 +366,51 @@ export default function HomePage() {
     }
   };
 
-  const speak = (text: string) => {
+    const speak = (text: string) => {
     if (!("speechSynthesis" in window)) {
       setToast("Speech playback is not supported in this browser.");
       return;
     }
+
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text.replace(/\b(FOR|AGAINST|VERDICT):/g, "$1."));
-    utterance.rate = 1.02;
-    utterance.lang = /[\u0C00-\u0C7F]/.test(text) ? "te-IN" : "en-IN";
+
+    // Clean markdown, symbols, and tags so it doesn't spell them out
+    const cleanText = text
+      .replace(/\b(FOR|AGAINST|VERDICT):/g, "")
+      .replace(/[*_#`~>]/g, "")
+      .trim();
+
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    const isTelugu = /[\u0c00-\u0c7f]/.test(cleanText);
+
+    const voices = window.speechSynthesis.getVoices();
+
+    if (isTelugu) {
+      utterance.lang = "te-IN";
+      // Pick an explicit Telugu voice if installed (e.g. Google Telugu, Microsoft Mohan)
+      const teluguVoice = voices.find(
+        (v) => v.lang.toLowerCase().includes("te") || v.name.toLowerCase().includes("telugu")
+      );
+      if (teluguVoice) {
+        utterance.voice = teluguVoice;
+      }
+      utterance.rate = 0.92; // Slightly relaxed pace makes syllables smooth and natural
+      utterance.pitch = 1.0;
+    } else {
+      utterance.lang = "en-IN";
+      const englishVoice = voices.find(
+        (v) => v.lang === "en-IN" || v.lang.startsWith("en")
+      );
+      if (englishVoice) {
+        utterance.voice = englishVoice;
+      }
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+    }
+
     window.speechSynthesis.speak(utterance);
   };
+
 
   const toggleMic = () => {
     if (listening && recognitionRef.current) {
