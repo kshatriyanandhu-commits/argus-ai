@@ -59,9 +59,11 @@ async function* streamFromGemini(
   for (const modelName of candidateModels) {
     try {
       const model = genAI.getGenerativeModel({
-        model: "gemini-3.5-flash-lite",
+        model: modelName,
         systemInstruction: SYSTEM_PROMPT,
+        tools: [{ googleSearch: {} } as any],
       });
+
 
       const chatSession = model.startChat({ history: formattedHistory });
       const resultStream = await chatSession.sendMessageStream(newMessage);
