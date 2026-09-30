@@ -1,8 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
 
-export type ProviderType = "auto" | "gemini" | "groq" | "llama3.2";
-
 export interface RawMessage {
   role: "user" | "model" | "assistant" | "system";
   content: string;
@@ -81,10 +79,22 @@ async function* streamFromGroq(
     { role: "user" as const, content: newMessage },
   ];
 
-  // Active production Groq model
+  // Dynamically inspect available models on this key
+  let selectedModel = "llama-3.3-70b-versatile";
+  try {
+    const list = await groq.models.list();
+    const activeIds = list.data.map((m) => m.id);
+    const matched =
+      activeIds.find((id) => id.includes("llama-3.3") || id.includes("llama-3.1") || id.includes("llama3")) ||
+      activeIds[0];
+    if (matched) selectedModel = matched;
+  } catch {
+    // If listing fails, proceed with default
+  }
+
   const stream = await groq.chat.completions.create(
     {
-      model: "llama-3.3-70b-versatile",
+      model: selectedModel,
       messages: groqMessages,
       stream: true,
     },
@@ -107,32 +117,40 @@ export async function* streamChat(
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
-  if (provider === "groq" || provider === "llama3.2") {
-    if (!groqKey) throw new Error("GROQ_API_KEY is missing in Vercel.");
-    yield* streamFromGroq(history, newMessage, groqKey, signal);
-    return;
+  // 1. Try Gemini first if auto or gemini requested
+  if (provider === "gemini" || provider === "auto") {
+    if (geminiKey) {
+      try {
+        yield* streamFromGemini(history, newMessage, geminiKey, signal);
+        return;
+      } catch (err) {
+        console.warn("Gemini execution failed, routing to Groq failover:", err);
+        if (provider === "gemini" && !groqKey) throw err;
+      }
+    }
   }
 
-  if (provider === "gemini") {
-    if (!geminiKey) throw new Error("GEMINI_API_KEY is missing in Vercel.");
+  // 2. Try Groq (either explicitly requested, or as seamless fallback)
+  if (groqKey) {
+    try {
+      yield* streamFromGroq(history, newMessage, groqKey, signal);
+      return;
+    } catch (err) {
+      console.warn("Groq execution failed, routing to Gemini fallback:", err);
+      // If Groq fails and Gemini key is present, fallback to Gemini
+      if (geminiKey) {
+        yield* streamFromGemini(history, newMessage, geminiKey, signal);
+        return;
+      }
+      throw err;
+    }
+  }
+
+  // 3. Fallback to Gemini if Groq was requested but failed
+  if (geminiKey) {
     yield* streamFromGemini(history, newMessage, geminiKey, signal);
     return;
   }
 
-  // Auto pipeline: Gemini primary -> Groq fallback
-  if (geminiKey) {
-    try {
-      yield* streamFromGemini(history, newMessage, geminiKey, signal);
-      return;
-    } catch (err) {
-      console.warn("Gemini stream failed, activating Groq failover:", err);
-    }
-  }
-
-  if (groqKey) {
-    yield* streamFromGroq(history, newMessage, groqKey, signal);
-    return;
-  }
-
-  throw new Error("No API keys found. Please set GEMINI_API_KEY or GROQ_API_KEY in Vercel.");
+  throw new Error("No functional API keys configured. Set GEMINI_API_KEY or GROQ_API_KEY in Vercel.");
 }
