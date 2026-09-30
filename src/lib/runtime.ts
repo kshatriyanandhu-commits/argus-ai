@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
 
-export type ProviderType = "auto" | "gemini" | "groq" | "llama3.2";
+export type ProviderType = "auto" | "gemini" | "groq" | "llama3.2" | string;
 
 export interface RawMessage {
   role: "user" | "model" | "assistant" | "system";
@@ -81,15 +81,15 @@ async function* streamFromGroq(
     { role: "user" as const, content: newMessage },
   ];
 
-  // Active production Groq models (No deprecated versions)
-  const supportedModels = [
+  // Active production Groq models only (resolves the 400 decommissioned error)
+  const activeModels = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
   ];
 
   let lastError: unknown = null;
 
-  for (const modelId of supportedModels) {
+  for (const modelId of activeModels) {
     try {
       const stream = await groq.chat.completions.create(
         {
@@ -115,19 +115,20 @@ async function* streamFromGroq(
     }
   }
 
-  throw lastError || new Error("Unable to connect to active Groq models.");
+  throw lastError || new Error("Failed to stream from Groq.");
 }
 
 export async function* streamChat(
   history: RawMessage[],
   newMessage: string,
   signal?: AbortSignal,
-  provider: string = "auto"
+  provider: ProviderType = "auto"
 ): AsyncGenerator<string, void, unknown> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
-  if (provider === "groq" || provider === "llama3.2") {
+  // If page.tsx explicitly asks for Groq or llama3.2
+  if (provider === "groq" || provider === "llama3.2" || provider === "llama-3.3-70b-versatile") {
     if (!groqKey) throw new Error("GROQ_API_KEY is missing in Vercel.");
     yield* streamFromGroq(history, newMessage, groqKey, signal);
     return;
@@ -139,13 +140,13 @@ export async function* streamChat(
     return;
   }
 
-  // Auto pipeline: Gemini 2.5 Flash primary -> Groq Llama 3.3 failover
+  // Auto pipeline: Gemini primary -> Groq fallback
   if (geminiKey) {
     try {
       yield* streamFromGemini(history, newMessage, geminiKey, signal);
       return;
     } catch (err) {
-      console.warn("Gemini stream failed, activating Groq failover:", err);
+      console.warn("Gemini stream failed, switching to Groq failover:", err);
     }
   }
 
