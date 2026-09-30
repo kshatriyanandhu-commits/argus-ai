@@ -424,6 +424,7 @@ export default function HomePage() {
     setShowScroll(false);
 
     let id = activeIdRef.current;
+    let botMsgId = crypto.randomUUID();
     try {
       if (!id) {
         const created = await fetch("/api/conversations", { method: "POST" });
@@ -435,7 +436,7 @@ export default function HomePage() {
         setConversations((prev) => [data.conversation, ...prev]);
       }
 
-      const botMsgId = crypto.randomUUID();
+      botMsgId = crypto.randomUUID();
 
 setMessages((prev) => [
   ...prev,
