@@ -47,13 +47,10 @@ async function* streamFromGemini(
       parts: [{ text: m.content }],
     }));
 
-  // Updated to the exact active endpoints recommended by Google API
-    const candidateModels = [
-    process.env.GEMINI_MODEL?.trim() || "gemini-3.8-flash",
+  const candidateModels = [
     "gemini-3.8-flash",
     "gemini-3.5-flash-lite",
   ];
-
 
   let lastError: unknown = null;
 
@@ -62,9 +59,7 @@ async function* streamFromGemini(
       const model = genAI.getGenerativeModel({
         model: modelName,
         systemInstruction: SYSTEM_PROMPT,
-        tools: [{ googleSearch: {} } as any],
       });
-
 
       const chatSession = model.startChat({ history: formattedHistory });
       const resultStream = await chatSession.sendMessageStream(newMessage);
@@ -77,25 +72,11 @@ async function* streamFromGemini(
       return;
     } catch (err: any) {
       lastError = err;
-      const status = err?.status || err?.statusCode;
-      const msg = err?.message || "";
-
-      if (
-        status === 404 ||
-        status === 503 ||
-        status === 429 ||
-        msg.includes("404") ||
-        msg.includes("503") ||
-        msg.includes("429")
-      ) {
-        console.warn(`Gemini model ${modelName} error (${status || msg}). Cascading...`);
-        continue;
-      }
-      throw err;
+      console.warn(`Gemini model ${modelName} failed. Trying next model or failover...`, err?.message || err);
     }
   }
 
-  throw lastError || new Error("All Gemini candidate models failed.");
+  throw lastError || new Error("All Gemini models failed.");
 }
 
 async function* streamFromGroq(
@@ -120,8 +101,7 @@ async function* streamFromGroq(
 
   const candidateModels = [
     "llama-3.3-70b-versatile",
-    "llama-3.2-11b-vision-preview",
-    "llama-3.2-3b-preview",
+    "llama-3.1-8b-instant",
   ];
 
   let lastError: unknown = null;
@@ -145,19 +125,11 @@ async function* streamFromGroq(
       return;
     } catch (err: any) {
       lastError = err;
-      if (
-        err?.status === 404 ||
-        err?.status === 400 ||
-        err?.message?.includes("404") ||
-        err?.message?.includes("decommissioned")
-      ) {
-        continue;
-      }
-      throw err;
+      console.warn(`Groq model ${modelId} error:`, err?.message || err);
     }
   }
 
-  throw lastError || new Error("Failed to stream from all active Groq models.");
+  throw lastError || new Error("Failed to stream from all Groq models.");
 }
 
 export async function* streamChat(
@@ -169,42 +141,40 @@ export async function* streamChat(
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
-  // 1. If Groq explicitly requested via UI toggle
-  if (provider === "groq" || provider === "llama3.2") {
-    if (groqKey) {
-      try {
-        yield* streamFromGroq(history, newMessage, groqKey, signal);
-        return;
-      } catch (err) {
-        console.warn("Groq failed, attempting Gemini fallback:", err);
-      }
-    }
-  }
-
-  // 2. Primary Engine: Gemini 3.8 Flash / 3.5 Flash Lite
-  if (geminiKey) {
-    try {
-      yield* streamFromGemini(history, newMessage, geminiKey, signal);
-      return;
-    } catch (err) {
-      console.warn("All Gemini tiers unavailable, activating Groq failover:", err);
-    }
-  }
-
-  // 3. Automated Failover Engine: Groq takes over immediately
-  if (groqKey) {
+  // Manual Groq override from frontend toggle
+  if ((provider === "groq" || provider === "llama3.2") && groqKey) {
     try {
       yield* streamFromGroq(history, newMessage, groqKey, signal);
       return;
     } catch (err) {
-      console.warn("Groq failover failed:", err);
-      if (geminiKey) {
-        yield* streamFromGemini(history, newMessage, geminiKey, signal);
-        return;
+      console.warn("Manual Groq request failed, trying Gemini fallback:", err);
+    }
+  }
+
+  // Attempt Primary Engine: Gemini
+  let geminiSuccess = false;
+  if (geminiKey) {
+    try {
+      for await (const chunk of streamFromGemini(history, newMessage, geminiKey, signal)) {
+        geminiSuccess = true;
+        yield chunk;
       }
+      return;
+    } catch (err) {
+      console.warn("Gemini engine error / 429 quota reached. Failing over to Groq immediately...", err);
+    }
+  }
+
+  // Auto Failover Engine: Groq (if Gemini had 429 quota or failed)
+  if (!geminiSuccess && groqKey) {
+    try {
+      yield* streamFromGroq(history, newMessage, groqKey, signal);
+      return;
+    } catch (err) {
+      console.error("Groq fallback also encountered an error:", err);
       throw err;
     }
   }
 
-  throw new Error("No functional AI provider available. Check GEMINI_API_KEY and GROQ_API_KEY in Vercel.");
+  throw new Error("No active AI providers available. Check your API keys.");
 }
