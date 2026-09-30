@@ -43,7 +43,6 @@ async function* streamFromGemini(
       parts: [{ text: m.content }],
     }));
 
-  // Cascade across Gemini models if one hits 503 (high demand) or 404
   const candidateModels = [
     "gemini-2.5-flash",
     "gemini-1.5-flash",
@@ -68,13 +67,12 @@ async function* streamFromGemini(
         const text = chunk.text();
         if (text) yield text;
       }
-      return; // Succeeded, exit cleanly
+      return;
     } catch (err: any) {
       lastError = err;
       const status = err?.status || err?.statusCode;
       const msg = err?.message || "";
 
-      // If overloaded (503), rate-limited (429), or missing (404), cascade to next candidate
       if (status === 503 || status === 429 || status === 404 || msg.includes("503") || msg.includes("429") || msg.includes("404")) {
         console.warn(`Gemini model ${modelName} unavailable (${status || msg}). Trying alternate candidate...`);
         continue;
@@ -106,7 +104,13 @@ async function* streamFromGroq(
     { role: "user" as const, content: newMessage },
   ];
 
-  const candidateModels = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+  // Active production Groq models (excluding decommissioned llama-3.1-8b-instant)
+  const candidateModels = [
+    "llama-3.3-70b-versatile",
+    "llama-3.2-11b-vision-preview",
+    "llama-3.2-3b-preview",
+    "llama-3.2-1b-preview"
+  ];
   let lastError: unknown = null;
 
   for (const modelId of candidateModels) {
@@ -128,11 +132,16 @@ async function* streamFromGroq(
       return;
     } catch (err: any) {
       lastError = err;
-      continue;
+      // If 404 or decommissioned, cascade to next active model ID
+      if (err?.status === 404 || err?.status === 400 || err?.message?.includes("404") || err?.message?.includes("decommissioned")) {
+        console.warn(`Groq model ${modelId} failed with ${err?.status}. Trying next...`);
+        continue;
+      }
+      throw err;
     }
   }
 
-  throw lastError || new Error("Failed to stream from Groq production models.");
+  throw lastError || new Error("Failed to stream from all active Groq models.");
 }
 
 export async function* streamChat(
@@ -144,7 +153,7 @@ export async function* streamChat(
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
-  // 1. If user explicitly selected Groq
+  // 1. If Groq explicitly requested, attempt Groq first
   if (provider === "groq" || provider === "llama3.2") {
     if (groqKey) {
       try {
@@ -156,26 +165,31 @@ export async function* streamChat(
     }
   }
 
-  // 2. Primary Engine: Try Gemini (handles 503 spikes across model tiers)
+  // 2. Primary Engine: Gemini (with internal model tier cascade)
   if (geminiKey) {
     try {
       yield* streamFromGemini(history, newMessage, geminiKey, signal);
       return;
     } catch (err) {
-      console.warn("All Gemini tiers unavailable, activating Groq failover:", err);
+      console.warn("Gemini cascade failed, activating Groq failover:", err);
     }
   }
 
-  // 3. Automated Fallback: Groq takes over immediately if Gemini is down or experiencing 503 spikes
+  // 3. Automated Fallback: Groq takes over if Gemini is unavailable
   if (groqKey) {
     try {
       yield* streamFromGroq(history, newMessage, groqKey, signal);
       return;
     } catch (err) {
       console.warn("Groq failover failed:", err);
+      // Secondary fallback back to Gemini if available
+      if (geminiKey) {
+        yield* streamFromGemini(history, newMessage, geminiKey, signal);
+        return;
+      }
       throw err;
     }
   }
 
-  throw new Error("All AI engines currently overloaded. Please try again in a few moments.");
+  throw new Error("No functional AI provider available. Check GEMINI_API_KEY and GROQ_API_KEY in Vercel.");
 }
