@@ -1,100 +1,53 @@
 import { NextRequest } from "next/server";
-import { db } from "@/db";
-import { argusConversations, argusMessages } from "@/db/schema";
-import { streamChat, RawMessage, ProviderType } from "@/lib/runtime";
-import { eq, asc } from "drizzle-orm";
+import { streamChat } from "@/lib/runtime";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
-    if (!db) {
-      return new Response(JSON.stringify({ error: "Database connection unavailable." }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+    const body = await req.json();
+    const { message, messages, conversationId, provider = "auto" } = body;
 
-    const { conversationId, message, provider = "auto" } = await req.json();
+    const query = message || (messages && messages[messages.length - 1]?.content);
 
-    if (!conversationId || !message || typeof message !== "string") {
-      return new Response(JSON.stringify({ error: "Missing conversationId or message." }), {
+    if (!query) {
+      return new Response(JSON.stringify({ error: "Message content is required." }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    const previousMessages = await db
-      .select()
-      .from(argusMessages)
-      .where(eq(argusMessages.conversationId, conversationId))
-      .orderBy(asc(argusMessages.createdAt));
-
-    const history: RawMessage[] = previousMessages.map((m) => ({
-      role: m.role as "user" | "model" | "assistant" | "system",
-      content: m.content,
-    }));
-
-    await db.insert(argusMessages).values({
-      id: crypto.randomUUID(),
-      conversationId,
-      role: "user",
-      content: message.trim(),
-    });
-
-    await db
-      .update(argusConversations)
-      .set({ updatedAt: new Date() })
-      .where(eq(argusConversations.id, conversationId));
+    const history = Array.isArray(messages) ? messages.slice(0, -1) : [];
 
     const encoder = new TextEncoder();
-    let completeResponse = "";
-
-    const stream = new ReadableStream({
+    const readableStream = new ReadableStream({
       async start(controller) {
         try {
-          for await (const token of streamChat(
-            history,
-            message,
-            req.signal,
-            provider as ProviderType
-          )) {
-            completeResponse += token;
+          for await (const token of streamChat(history, query, req.signal, provider)) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ token })}\n\n`));
           }
-
-          if (completeResponse.trim() && db) {
-            await db.insert(argusMessages).values({
-              id: crypto.randomUUID(),
-              conversationId,
-              role: "model",
-              content: completeResponse,
-            });
-          }
-
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ done: true, fullText: completeResponse })}\n\n`)
-          );
           controller.close();
-        } catch (streamErr) {
-          const errMsg = streamErr instanceof Error ? streamErr.message : "Inference runtime error";
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errMsg })}\n\n`));
+        } catch (err: any) {
+          console.error("Chat streaming failure:", err);
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ error: err?.message || "Internal generation error." })}\n\n`
+            )
+          );
           controller.close();
         }
       },
     });
 
-    return new Response(stream, {
+    return new Response(readableStream, {
       headers: {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
       },
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Internal Server Error";
-    return new Response(JSON.stringify({ error: message }), {
+  } catch (error: any) {
+    return new Response(JSON.stringify({ error: error?.message || "Server error" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
     });

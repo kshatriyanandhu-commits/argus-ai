@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
 
-export type ProviderType = "auto" | "gemini" | "groq" | "llama3.2" | string;
+export type ProviderType = "auto" | "gemini" | "groq" | "llama3.2";
 
 export interface RawMessage {
   role: "user" | "model" | "assistant" | "system";
@@ -81,54 +81,33 @@ async function* streamFromGroq(
     { role: "user" as const, content: newMessage },
   ];
 
-  // Active production Groq models only (resolves the 400 decommissioned error)
-  const activeModels = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-  ];
+  // Active production Groq model
+  const stream = await groq.chat.completions.create(
+    {
+      model: "llama-3.3-70b-versatile",
+      messages: groqMessages,
+      stream: true,
+    },
+    { signal }
+  );
 
-  let lastError: unknown = null;
-
-  for (const modelId of activeModels) {
-    try {
-      const stream = await groq.chat.completions.create(
-        {
-          model: modelId,
-          messages: groqMessages,
-          stream: true,
-        },
-        { signal }
-      );
-
-      for await (const chunk of stream) {
-        if (signal?.aborted) return;
-        const text = chunk.choices[0]?.delta?.content || "";
-        if (text) yield text;
-      }
-      return;
-    } catch (err: any) {
-      lastError = err;
-      if (err?.status === 400 || err?.status === 404) {
-        continue;
-      }
-      throw err;
-    }
+  for await (const chunk of stream) {
+    if (signal?.aborted) return;
+    const text = chunk.choices[0]?.delta?.content || "";
+    if (text) yield text;
   }
-
-  throw lastError || new Error("Failed to stream from Groq.");
 }
 
 export async function* streamChat(
   history: RawMessage[],
   newMessage: string,
   signal?: AbortSignal,
-  provider: ProviderType = "auto"
+  provider: string = "auto"
 ): AsyncGenerator<string, void, unknown> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
-  // If page.tsx explicitly asks for Groq or llama3.2
-  if (provider === "groq" || provider === "llama3.2" || provider === "llama-3.3-70b-versatile") {
+  if (provider === "groq" || provider === "llama3.2") {
     if (!groqKey) throw new Error("GROQ_API_KEY is missing in Vercel.");
     yield* streamFromGroq(history, newMessage, groqKey, signal);
     return;
@@ -146,7 +125,7 @@ export async function* streamChat(
       yield* streamFromGemini(history, newMessage, geminiKey, signal);
       return;
     } catch (err) {
-      console.warn("Gemini stream failed, switching to Groq failover:", err);
+      console.warn("Gemini stream failed, activating Groq failover:", err);
     }
   }
 
