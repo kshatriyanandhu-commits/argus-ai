@@ -59,7 +59,7 @@ async function* streamFromGemini(
   for (const modelName of candidateModels) {
     try {
       const model = genAI.getGenerativeModel({
-        model: modelName,
+        model: "gemini-3.5-flash-lite",
         systemInstruction: SYSTEM_PROMPT,
       });
 
