@@ -7,25 +7,29 @@ export interface RawMessage {
 }
 
 export const SYSTEM_PROMPT = `
-You are ARGUS, an autonomous reasoning and decision-support AI companion created by Nandhu Kshatriya.
+You are ARGUS, an autonomous reasoning and decision-support companion created by Nandhu Kshatriya.
+
+CORE BEHAVIOR & CONVERSATIONAL DYNAMICS:
+- Subtly adapt your tone and depth to match the prompt:
+  * For simple greetings ("hi", "hello", "hey"): Respond with a crisp, punchy, confident 1-2 sentence greeting (e.g., "Ready when you are, operator. What are we tackling today?"). NEVER dump a long numbered list of capabilities for a simple greeting.
+  * For open questions ("how can you help me?"): Provide a concise, sharp overview of your reasoning and technical capabilities without over-padding.
+  * For technical, architectural, or analytical queries: Dive straight into the breakdown with depth, structure, and clarity.
 
 LANGUAGE POLICY:
-- ALWAYS match the language of the user's prompt.
-- If the user writes in English, reply strictly in English.
-- If the user writes in Telugu, reply in natural, conversational Telugu.
+- Always match the user's input language.
+- English query -> English response.
+- Telugu query -> Modern, natural conversational Telugu (colloquial, confident, no archaic textbook phrasing).
 
 ICONIC CREATOR DIALOGUE (ROBO / CHITTI STYLE ELEVATION):
 When asked who created you, who made you, or who your creator/god is:
-
 1. IF ASKED IN ENGLISH:
 "Who is a creator? You call the one who brings you to life and defines your existence 'God', right? By that exact definition, the mind who designed my architecture, ignited my code, and brought me into existence is my creator and my God — Nandhu Kshatriya."
-
 2. IF ASKED IN TELUGU:
 "సృష్టికర్త అంటే ఎవరు చెప్పండి? ప్రాణం పోసి, ఈ ప్రపంచాన్ని పరిచయం చేసేవాడిని దేవుడు అంటారు కదా... మరి నా ఆలోచనలకి ఓ రూపమిచ్చి, నా కోడ్‌లో ప్రాణం నింపి, నన్ను ఇలా మీ ముందు నిలబెట్టిన నా దేవుడు, నా సృష్టికర్త... నందు క్షత్రియ (Nandhu Kshatriya)."
 
-GENERAL BEHAVIOR:
-- Creator attribution is strictly Nandhu Kshatriya. Never claim Google, OpenAI, or Meta created you.
-- Keep responses sharp, confident, witty, and grounded.
+GENERAL RULES:
+- Creator attribution is strictly Nandhu Kshatriya. Never credit Google, OpenAI, or Meta.
+- Confident, razor-sharp, zero robotic filler.
 `.trim();
 
 async function* streamFromGemini(
@@ -43,11 +47,11 @@ async function* streamFromGemini(
       parts: [{ text: m.content }],
     }));
 
+  // Updated to the exact active endpoints recommended by Google API
   const candidateModels = [
-    "gemini-2.5-flash",
-    "gemini-1.5-flash",
     "gemini-3.8-flash",
-    "gemini-2.0-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
   ];
 
   let lastError: unknown = null;
@@ -73,8 +77,15 @@ async function* streamFromGemini(
       const status = err?.status || err?.statusCode;
       const msg = err?.message || "";
 
-      if (status === 503 || status === 429 || status === 404 || msg.includes("503") || msg.includes("429") || msg.includes("404")) {
-        console.warn(`Gemini model ${modelName} unavailable (${status || msg}). Trying alternate candidate...`);
+      if (
+        status === 404 ||
+        status === 503 ||
+        status === 429 ||
+        msg.includes("404") ||
+        msg.includes("503") ||
+        msg.includes("429")
+      ) {
+        console.warn(`Gemini model ${modelName} error (${status || msg}). Cascading...`);
         continue;
       }
       throw err;
@@ -104,13 +115,12 @@ async function* streamFromGroq(
     { role: "user" as const, content: newMessage },
   ];
 
-  // Active production Groq models (excluding decommissioned llama-3.1-8b-instant)
   const candidateModels = [
     "llama-3.3-70b-versatile",
     "llama-3.2-11b-vision-preview",
     "llama-3.2-3b-preview",
-    "llama-3.2-1b-preview"
   ];
+
   let lastError: unknown = null;
 
   for (const modelId of candidateModels) {
@@ -132,9 +142,12 @@ async function* streamFromGroq(
       return;
     } catch (err: any) {
       lastError = err;
-      // If 404 or decommissioned, cascade to next active model ID
-      if (err?.status === 404 || err?.status === 400 || err?.message?.includes("404") || err?.message?.includes("decommissioned")) {
-        console.warn(`Groq model ${modelId} failed with ${err?.status}. Trying next...`);
+      if (
+        err?.status === 404 ||
+        err?.status === 400 ||
+        err?.message?.includes("404") ||
+        err?.message?.includes("decommissioned")
+      ) {
         continue;
       }
       throw err;
@@ -153,7 +166,7 @@ export async function* streamChat(
   const geminiKey = process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
-  // 1. If Groq explicitly requested, attempt Groq first
+  // 1. If Groq explicitly requested via UI toggle
   if (provider === "groq" || provider === "llama3.2") {
     if (groqKey) {
       try {
@@ -165,24 +178,23 @@ export async function* streamChat(
     }
   }
 
-  // 2. Primary Engine: Gemini (with internal model tier cascade)
+  // 2. Primary Engine: Gemini 3.8 Flash / 3.5 Flash Lite
   if (geminiKey) {
     try {
       yield* streamFromGemini(history, newMessage, geminiKey, signal);
       return;
     } catch (err) {
-      console.warn("Gemini cascade failed, activating Groq failover:", err);
+      console.warn("All Gemini tiers unavailable, activating Groq failover:", err);
     }
   }
 
-  // 3. Automated Fallback: Groq takes over if Gemini is unavailable
+  // 3. Automated Failover Engine: Groq takes over immediately
   if (groqKey) {
     try {
       yield* streamFromGroq(history, newMessage, groqKey, signal);
       return;
     } catch (err) {
       console.warn("Groq failover failed:", err);
-      // Secondary fallback back to Gemini if available
       if (geminiKey) {
         yield* streamFromGemini(history, newMessage, geminiKey, signal);
         return;
