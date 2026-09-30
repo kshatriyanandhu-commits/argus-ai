@@ -435,11 +435,14 @@ export default function HomePage() {
         setConversations((prev) => [data.conversation, ...prev]);
       }
 
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: "user", content: text, createdAt: new Date().toISOString() },
-        { id: "streaming", role: "model", content: "", createdAt: new Date().toISOString() },
-      ]);
+      const botMsgId = crypto.randomUUID();
+
+setMessages((prev) => [
+  ...prev,
+  { id: crypto.randomUUID(), role: "user", content: text, createdAt: new Date().toISOString() },
+  { id: botMsgId, role: "model", content: "", createdAt: new Date().toISOString() }
+]);
+
 
       const started = performance.now();
       const controller = new AbortController();
@@ -470,16 +473,19 @@ export default function HomePage() {
           const payload = JSON.parse(line.slice(5).trim());
           if (payload.error) throw new Error(payload.error);
           if (payload.token) {
-            complete += payload.token;
-            setMessages((prev) =>
-              prev.map((m) => (m.id === "streaming" ? { ...m, content: complete } : m))
-            );
-          }
+  setMessages((prev) =>
+    prev.map((msg) =>
+      msg.id === botMsgId
+        ? { ...msg, content: msg.content + payload.token }
+        : msg
+    )
+  );
+}
           if (payload.done) {
             complete = payload.fullText || complete;
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === "streaming" ? { ...m, id: crypto.randomUUID(), content: complete } : m
+                m.id === botMsgId ? { ...m, content: complete } : m
               )
             );
             if (voiceEnabled) speak(complete);
@@ -511,7 +517,7 @@ export default function HomePage() {
           : "Something went wrong.";
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === "streaming" ? { ...m, id: crypto.randomUUID(), content: errorText, error: true } : m
+          m.id === botMsgId ? { ...m, content: errorText, error: true } : m
         )
       );
       if (errorText === "Response stopped.") setToast("Generation stopped.");
