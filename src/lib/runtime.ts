@@ -45,7 +45,12 @@ async function* streamFromGemini(
       parts: [{ text: m.content }],
     }));
 
-  const candidateModels = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"];
+  // Target current endpoints recommended by the API
+  const candidateModels = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-2.5-flash",
+  ];
   let lastError: unknown = null;
 
   for (const modelName of candidateModels) {
@@ -96,7 +101,6 @@ async function* streamFromGroq(
     { role: "user" as const, content: newMessage },
   ];
 
-  // Specific, high-speed active Groq production models (terms-free)
   const candidateModels = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
   let lastError: unknown = null;
 
@@ -152,7 +156,6 @@ export async function* streamChat(
       return;
     } catch (err) {
       console.warn("Groq fallback stream failed:", err);
-      // If Groq fails and Gemini key exists, try Gemini
       if (geminiKey) {
         yield* streamFromGemini(history, newMessage, geminiKey, signal);
         return;
